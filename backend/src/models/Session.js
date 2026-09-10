@@ -17,8 +17,13 @@ const sessionSchema = new mongoose.Schema(
   {
     user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
     domain: { type: String, required: true },
+    targetRole: { type: String, default: "" },
+    experienceLevel: { type: String, default: "Fresher" },
+    jobDescription: { type: String, default: "" },
+    maxQuestions: { type: Number, default: 5 },
     status: { type: String, enum: ["in_progress", "completed"], default: "in_progress" },
     responses: [responseSchema],
+    followUpCount: { type: Number, default: 0 },
     overallScore: { type: Number, default: null },
     guidance: { type: String, default: "" }, // personalized prep plan text
   },

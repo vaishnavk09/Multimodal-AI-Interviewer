@@ -1,24 +1,30 @@
-"""
-AI microservice for the Multimodal AI Interviewer.
-
-Phase-1 scope:
-- NLP scoring is REAL: Sentence-BERT similarity (answer vs. an ideal-answer
-  keyword set) + VADER sentiment, combined into a 0-100 score.
-- Facial and speech scoring are PLACEHOLDER stubs for now — swap these
-  functions for the MediaPipe/DeepFace and Librosa/CNN pipelines once the
-  video/audio capture pipeline is wired up on the frontend.
-"""
-
-from fastapi import FastAPI
+import io
+import re
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from pydantic import BaseModel
 from sentence_transformers import SentenceTransformer, util
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+import pypdf
+import docx
 
 app = FastAPI(title="Multimodal AI Interviewer - Analysis Service")
 
-# Loaded once at startup — small, free, open-source model (~80MB).
-embedder = SentenceTransformer("all-MiniLM-L6-v2")
-sentiment_analyzer = SentimentIntensityAnalyzer()
+_embedder = None
+_sentiment_analyzer = None
+
+
+def get_embedder():
+    global _embedder
+    if _embedder is None:
+        _embedder = SentenceTransformer("all-MiniLM-L6-v2")
+    return _embedder
+
+
+def get_sentiment_analyzer():
+    global _sentiment_analyzer
+    if _sentiment_analyzer is None:
+        _sentiment_analyzer = SentimentIntensityAnalyzer()
+    return _sentiment_analyzer
 
 
 class AnalyzeRequest(BaseModel):
@@ -33,9 +39,90 @@ class AnalyzeResponse(BaseModel):
     feedback: str
 
 
+class ParseResumeResponse(BaseModel):
+    skills: list[str]
+    projects: list[str]
+    yearsExperience: float
+    rawText: str
+
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.post("/parse-resume", response_model=ParseResumeResponse)
+async def parse_resume(file: UploadFile = File(...)):
+    filename = (file.filename or "").lower()
+    content = await file.read()
+    raw_text = ""
+
+    if filename.endswith(".pdf"):
+        try:
+            reader = pypdf.PdfReader(io.BytesIO(content))
+            raw_text = "\n".join([page.extract_text() or "" for page in reader.pages])
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Failed to parse PDF resume: {str(e)}")
+    elif filename.endswith(".docx") or filename.endswith(".doc"):
+        try:
+            doc = docx.Document(io.BytesIO(content))
+            raw_text = "\n".join([p.text for p in doc.paragraphs if p.text])
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Failed to parse DOCX resume: {str(e)}")
+    else:
+        try:
+            raw_text = content.decode("utf-8", errors="ignore")
+        except Exception:
+            raw_text = ""
+
+    parsed = extract_resume_info(raw_text)
+    return ParseResumeResponse(
+        skills=parsed["skills"],
+        projects=parsed["projects"],
+        yearsExperience=parsed["yearsExperience"],
+        rawText=raw_text[:4000],
+    )
+
+
+def extract_resume_info(text: str) -> dict:
+    common_skills = [
+        "python", "javascript", "typescript", "react", "node", "express", "mongodb",
+        "sql", "postgresql", "docker", "kubernetes", "aws", "azure", "gcp", "git",
+        "java", "c++", "c#", "go", "rust", "html", "css", "tailwind", "fastapi",
+        "django", "flask", "pytorch", "tensorflow", "pandas", "numpy", "scikit-learn"
+    ]
+
+    found_skills = []
+    text_lower = text.lower()
+    for skill in common_skills:
+        if re.search(r"\b" + re.escape(skill) + r"\b", text_lower):
+            found_skills.append(skill.upper() if len(skill) <= 3 else skill.title())
+
+    projects = []
+    lines = [line.strip() for line in text.split("\n") if line.strip()]
+    in_project_section = False
+    for line in lines:
+        if re.search(r"\b(project|projects)\b", line, re.IGNORECASE):
+            in_project_section = True
+            continue
+        if in_project_section and re.search(r"\b(education|experience|work|skills|certifications)\b", line, re.IGNORECASE):
+            in_project_section = False
+
+        if in_project_section and 5 < len(line) < 100:
+            clean_line = line.lstrip("-*• 0123456789.").strip()
+            if clean_line:
+                projects.append(clean_line)
+
+    years = 0.0
+    year_matches = re.findall(r"(\d+)\+?\s*(?:year|yrs|yr)", text_lower)
+    if year_matches:
+        years = float(max([int(y) for y in year_matches if int(y) < 40] or [0]))
+
+    return {
+        "skills": list(set(found_skills)),
+        "projects": projects[:5],
+        "yearsExperience": years,
+    }
 
 
 @app.post("/analyze", response_model=AnalyzeResponse)
@@ -59,6 +146,10 @@ def analyze(req: AnalyzeRequest):
 
 
 def score_nlp(question: str, transcript: str) -> tuple[int, str]:
+    """
+    NLP scoring: calculates semantic similarity between question and candidate transcript,
+    plus VADER sentiment compound score for overall tone alignment.
+    """
     if not transcript.strip():
         return 0, "No answer was recorded — remember to speak clearly into the microphone."
 

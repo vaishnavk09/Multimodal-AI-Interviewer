@@ -1,23 +1,95 @@
+import fs from "fs";
 import axios from "axios";
 import Session from "../models/Session.js";
+import User from "../models/User.js";
 import { generateQuestion } from "../services/llmService.js";
 
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL || "http://localhost:8000";
 
+export async function uploadResume(req, res) {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ message: "No resume file uploaded" });
+    }
+
+    const fileBuffer = fs.readFileSync(req.file.path);
+    const blob = new Blob([fileBuffer]);
+    const formData = new FormData();
+    formData.append("file", blob, req.file.originalname);
+
+    let parsedResume = { skills: [], projects: [], yearsExperience: 0, rawText: "" };
+    try {
+      const { data } = await axios.post(`${AI_SERVICE_URL}/parse-resume`, formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+      parsedResume = data;
+    } catch (err) {
+      console.warn("[interview] AI resume parsing service failed, using fallback:", err.message);
+    } finally {
+      if (fs.existsSync(req.file.path)) {
+        fs.unlinkSync(req.file.path);
+      }
+    }
+
+    const user = await User.findById(req.userId);
+    if (user) {
+      user.resume = {
+        skills: parsedResume.skills || [],
+        projects: parsedResume.projects || [],
+        yearsExperience: parsedResume.yearsExperience || 0,
+        rawText: parsedResume.rawText || "",
+        updatedAt: new Date(),
+      };
+      await user.save();
+    }
+
+    res.json({ message: "Resume uploaded and parsed successfully", resume: user?.resume });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Could not upload and parse resume" });
+  }
+}
+
 export async function startSession(req, res) {
   try {
-    const { domain } = req.body;
+    const { domain, targetRole, experienceLevel, jobDescription } = req.body;
+    const user = await User.findById(req.userId);
+
+    let maxQuestions = 5;
+    if (experienceLevel === "1-3 yrs") maxQuestions = 6;
+    else if (experienceLevel === "3+ yrs") maxQuestions = 8;
+
     const session = await Session.create({
       user: req.userId,
-      domain: domain || "General",
+      domain: domain || user?.domain || "General",
+      targetRole: targetRole || user?.targetRole || "",
+      experienceLevel: experienceLevel || user?.experienceLevel || "Fresher",
+      jobDescription: jobDescription || user?.jobDescription || "",
+      maxQuestions,
       responses: [],
+      followUpCount: 0,
     });
 
-    const question = await generateQuestion(session.domain);
+    if (user) {
+      if (targetRole) user.targetRole = targetRole;
+      if (experienceLevel) user.experienceLevel = experienceLevel;
+      if (jobDescription) user.jobDescription = jobDescription;
+      await user.save();
+    }
+
+    const candidateContext = {
+      targetRole: session.targetRole,
+      experienceLevel: session.experienceLevel,
+      jobDescription: session.jobDescription,
+      skills: user?.resume?.skills || [],
+      projects: user?.resume?.projects || [],
+    };
+
+    const question = await generateQuestion(session.domain, [], 0, candidateContext);
     session.responses.push({ question, transcript: "" });
     await session.save();
 
-    res.status(201).json({ sessionId: session._id, question });
+    res.status(201).json({ sessionId: session._id, question, maxQuestions: session.maxQuestions });
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: "Could not start session" });
@@ -36,6 +108,15 @@ export async function submitResponse(req, res) {
 
     const session = await Session.findById(sessionId);
     if (!session) return res.status(404).json({ message: "Session not found" });
+
+    const user = await User.findById(session.user);
+    const candidateContext = {
+      targetRole: session.targetRole,
+      experienceLevel: session.experienceLevel,
+      jobDescription: session.jobDescription,
+      skills: user?.resume?.skills || [],
+      projects: user?.resume?.projects || [],
+    };
 
     const current = session.responses.at(-1);
     current.transcript = transcript || "";
@@ -63,12 +144,22 @@ export async function submitResponse(req, res) {
     current.fusedScore = fusedScore;
     current.feedback = analysis.feedback || "Keep your answers structured and specific.";
 
-    const MAX_QUESTIONS = 5;
-    if (session.responses.length < MAX_QUESTIONS) {
+    const maxQuestions = session.maxQuestions || 5;
+    if (session.responses.length < maxQuestions) {
+      const currentFollowUp = session.followUpCount || 0;
       const nextQuestion = await generateQuestion(
         session.domain,
-        session.responses.map((r) => r.fusedScore).filter((s) => s != null)
+        session.responses,
+        currentFollowUp,
+        candidateContext
       );
+
+      if (currentFollowUp >= 2) {
+        session.followUpCount = 0;
+      } else {
+        session.followUpCount = currentFollowUp + 1;
+      }
+
       session.responses.push({ question: nextQuestion, transcript: "" });
       await session.save();
       return res.json({ done: false, nextQuestion, lastScore: fusedScore });
