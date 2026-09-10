@@ -7,6 +7,8 @@ from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 import pypdf
 import docx
 
+_whisper_model = None
+
 app = FastAPI(title="Multimodal AI Interviewer - Analysis Service")
 
 _embedder = None
@@ -46,6 +48,10 @@ class ParseResumeResponse(BaseModel):
     rawText: str
 
 
+class TranscribeResponse(BaseModel):
+    transcript: str
+
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
@@ -82,6 +88,28 @@ async def parse_resume(file: UploadFile = File(...)):
         yearsExperience=parsed["yearsExperience"],
         rawText=raw_text[:4000],
     )
+
+
+@app.post("/transcribe", response_model=TranscribeResponse)
+async def transcribe(file: UploadFile = File(...)):
+    global _whisper_model
+    try:
+        from faster_whisper import WhisperModel
+
+        if _whisper_model is None:
+            _whisper_model = WhisperModel("base", device="cpu", compute_type="int8")
+        content = await file.read()
+        safe_name = re.sub(r"[^a-zA-Z0-9.]", "-", file.filename or "answer.webm")
+        temp_path = f"/tmp/interview-{safe_name}"
+        with open(temp_path, "wb") as output:
+            output.write(content)
+        segments, _ = _whisper_model.transcribe(temp_path)
+        transcript = " ".join(segment.text.strip() for segment in segments).strip()
+        return TranscribeResponse(transcript=transcript)
+    except ImportError:
+        raise HTTPException(status_code=503, detail="faster-whisper is not installed")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to transcribe recording: {str(e)}")
 
 
 def extract_resume_info(text: str) -> dict:

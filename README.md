@@ -24,19 +24,18 @@ What's working end-to-end right now:
 - Signup/login with JWT
 - Start an interview session, get an LLM-generated question (falls back to a
   static question bank if `GEMINI_API_KEY` isn't set, so it never breaks)
-- Submit a (typed, for now) answer, get a **real** NLP relevance/sentiment score
+- Submit a typed or recorded audio/video answer; recorded answers are transcribed
+  with faster-whisper when the AI service is configured
+- Get a **real** NLP relevance/sentiment score for the submitted answer
 - Fused score + a simple rule-based "weakest area" guidance message
 - Facial and speech scores are currently **hardcoded placeholders** (65) — see
   `ai-services/main.py` for exactly where to plug in the real models
 
 What's NOT built yet (next steps, roughly in priority order):
-1. Replace the answer textarea with real `getUserMedia` + `MediaRecorder` audio/video capture
-2. Add ASR (faster-whisper) to transcribe the captured audio server-side
-3. Implement `score_facial_placeholder()` with MediaPipe + DeepFace
-4. Implement `score_speech_placeholder()` with Librosa MFCC + a trained CNN/LSTM
-   (train on RAVDESS/CREMA-D — see project literature review)
-5. Pre-interview environment check (camera/mic/connection test) before session starts
-6. Session history dashboard (charts of score trends across sessions)
+1. Implement `score_facial_placeholder()` with MediaPipe + DeepFace
+2. Implement `score_speech_placeholder()` with Librosa MFCC + a heuristic, then a trained CNN/LSTM
+3. Add a pre-interview environment check (camera/mic/connection test)
+4. Add a session history dashboard (charts of score trends across sessions)
 
 ## Getting started (local dev, no Docker)
 

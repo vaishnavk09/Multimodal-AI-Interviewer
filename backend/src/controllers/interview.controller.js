@@ -85,7 +85,7 @@ export async function startSession(req, res) {
       projects: user?.resume?.projects || [],
     };
 
-    const question = await generateQuestion(session.domain, [], 0, candidateContext);
+    const question = await generateQuestion(session.domain, session.responses, 0, candidateContext);
     session.responses.push({ question, transcript: "" });
     await session.save();
 
@@ -104,7 +104,7 @@ export async function startSession(req, res) {
 export async function submitResponse(req, res) {
   try {
     const { sessionId } = req.params;
-    const { transcript } = req.body; // audio/video files handled via multer in route
+    let { transcript } = req.body;
 
     const session = await Session.findById(sessionId);
     if (!session) return res.status(404).json({ message: "Session not found" });
@@ -119,6 +119,23 @@ export async function submitResponse(req, res) {
     };
 
     const current = session.responses.at(-1);
+    const mediaFile = req.files?.audio?.[0] || req.files?.video?.[0];
+    if (mediaFile) {
+      try {
+        const mediaBuffer = fs.readFileSync(mediaFile.path);
+        const formData = new FormData();
+        formData.append("file", new Blob([mediaBuffer]), mediaFile.originalname);
+        const { data } = await axios.post(`${AI_SERVICE_URL}/transcribe`, formData, {
+          headers: { "Content-Type": "multipart/form-data" },
+          timeout: 120000,
+        });
+        transcript = data.transcript;
+      } catch (err) {
+        console.warn("[interview] Audio transcription failed, using typed answer:", err.message);
+      } finally {
+        if (fs.existsSync(mediaFile.path)) fs.unlinkSync(mediaFile.path);
+      }
+    }
     current.transcript = transcript || "";
 
     // Call the Python AI microservice for analysis.
