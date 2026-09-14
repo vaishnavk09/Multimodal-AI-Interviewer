@@ -1,5 +1,7 @@
 import io
+import os
 import re
+import tempfile
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from pydantic import BaseModel
 from sentence_transformers import SentenceTransformer, util
@@ -100,12 +102,17 @@ async def transcribe(file: UploadFile = File(...)):
             _whisper_model = WhisperModel("base", device="cpu", compute_type="int8")
         content = await file.read()
         safe_name = re.sub(r"[^a-zA-Z0-9.]", "-", file.filename or "answer.webm")
-        temp_path = f"/tmp/interview-{safe_name}"
+        temp_dir = tempfile.gettempdir()
+        temp_path = os.path.join(temp_dir, f"interview-{safe_name}")
         with open(temp_path, "wb") as output:
             output.write(content)
-        segments, _ = _whisper_model.transcribe(temp_path)
-        transcript = " ".join(segment.text.strip() for segment in segments).strip()
-        return TranscribeResponse(transcript=transcript)
+        try:
+            segments, _ = _whisper_model.transcribe(temp_path)
+            transcript = " ".join(segment.text.strip() for segment in segments).strip()
+            return TranscribeResponse(transcript=transcript)
+        finally:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
     except ImportError:
         raise HTTPException(status_code=503, detail="faster-whisper is not installed")
     except Exception as e:
@@ -182,6 +189,8 @@ def score_nlp(question: str, transcript: str) -> tuple[int, str]:
         return 0, "No answer was recorded — remember to speak clearly into the microphone."
 
     # Relevance: semantic similarity between question and answer.
+    embedder = get_embedder()
+    sentiment_analyzer = get_sentiment_analyzer()
     q_emb = embedder.encode(question, convert_to_tensor=True)
     a_emb = embedder.encode(transcript, convert_to_tensor=True)
     relevance = float(util.cos_sim(q_emb, a_emb)[0][0])  # roughly -1..1
