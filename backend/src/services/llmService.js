@@ -39,7 +39,7 @@ export async function generateQuestion(
   if (validHistory.length === 0) {
     prompt = `You are an expert technical interviewer conducting a mock interview for the domain "${domain}".
 ${contextSnippet}Ask ONE concise opening interview question. Ground the question in the candidate's target role, experience level, or specific listed projects/skills if provided.
-Return ONLY the question text, no preamble or surrounding quotes.`;
+Return JSON ONLY in this format: {"type": "new_topic", "question": "..."}`;
   } else {
     const historyText = validHistory
       .map(
@@ -52,8 +52,8 @@ Return ONLY the question text, no preamble or surrounding quotes.`;
 
     const followUpConstraint =
       followUpCount >= 2
-        ? "You have already asked 2 follow-ups on this topic; move to a completely new topic appropriate for the domain and candidate's target role."
-        : "Decide whether to ask a follow-up that digs deeper into the candidate's last answer, or move to a new topic. Prefer a follow-up if the last answer was vague, mentioned something specific worth probing (a project, a technology, a decision), or contradicted an earlier answer. Otherwise move to a new topic appropriate for the domain.";
+        ? "You have already asked 2 follow-ups on this topic; move to a completely new topic appropriate for the domain and candidate's target role (type = 'new_topic')."
+        : "Decide whether to ask a follow-up that digs deeper into the candidate's last answer (type = 'follow_up'), or move to a new topic (type = 'new_topic'). Prefer a follow-up if the last answer was vague, mentioned something specific worth probing, or contradicted an earlier answer.";
 
     prompt = `You are an expert technical interviewer conducting a mock interview for the domain "${domain}".
 
@@ -62,7 +62,7 @@ ${historyText}
 
 ${followUpConstraint}
 
-Ask ONE concise interview question. Return ONLY the question text, with no preamble, conversational filler, or surrounding quotation marks.`;
+Return JSON ONLY in this format: {"type": "follow_up" | "new_topic", "question": "..."}`;
   }
 
   if (!apiKey) {
@@ -77,10 +77,26 @@ Ask ONE concise interview question. Return ONLY the question text, with no pream
     );
     let text = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
     if (text) {
-      // Strip any wrapping quotes if Gemini included them
-      text = text.replace(/^["']|["']$/g, "").trim();
+      // Clean potential markdown backticks ```json ... ```
+      text = text.replace(/```json/g, "").replace(/```/g, "").trim();
+      try {
+        const parsed = JSON.parse(text);
+        if (parsed && parsed.question) {
+          return {
+            question: parsed.question.trim(),
+            type: parsed.type === "follow_up" ? "follow_up" : "new_topic",
+          };
+        }
+      } catch (e) {
+        // Fallback text parsing if not valid JSON
+        text = text.replace(/^["']|["']$/g, "").trim();
+        return {
+          question: text,
+          type: validHistory.length === 0 ? "new_topic" : "follow_up",
+        };
+      }
     }
-    return text || fallbackQuestion(domain, validHistory.length);
+    return fallbackQuestion(domain, validHistory.length);
   } catch (err) {
     console.error("[llmService] Gemini call failed, using fallback:", err.message);
     return fallbackQuestion(domain, validHistory.length);
@@ -112,6 +128,11 @@ function fallbackQuestion(domain, turnIndex = 0) {
     ],
   };
   const list = bank[domain] || bank.General;
-  return list[turnIndex % list.length];
+  const isFollowUp = turnIndex % 2 === 1;
+  return {
+    question: list[turnIndex % list.length],
+    type: isFollowUp ? "follow_up" : "new_topic",
+  };
 }
+
 

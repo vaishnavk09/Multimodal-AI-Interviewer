@@ -85,7 +85,7 @@ export async function startSession(req, res) {
       projects: user?.resume?.projects || [],
     };
 
-    const question = await generateQuestion(session.domain, session.responses, 0, candidateContext);
+    const { question } = await generateQuestion(session.domain, session.responses, 0, candidateContext);
     session.responses.push({ question, transcript: "" });
     await session.save();
 
@@ -139,16 +139,22 @@ export async function submitResponse(req, res) {
     current.transcript = transcript || "";
 
     // Call the Python AI microservice for analysis.
-    // In early dev, this endpoint can just return mock scores.
     let analysis = { facialScore: 60, speechScore: 60, nlpScore: 60 };
     try {
-      const { data } = await axios.post(`${AI_SERVICE_URL}/analyze`, {
-        question: current.question,
-        transcript: current.transcript,
+      const analyzeFormData = new FormData();
+      analyzeFormData.append("question", current.question);
+      analyzeFormData.append("transcript", current.transcript);
+      if (mediaFile && fs.existsSync(mediaFile.path)) {
+        const mediaBuffer = fs.readFileSync(mediaFile.path);
+        analyzeFormData.append("file", new Blob([mediaBuffer]), mediaFile.originalname);
+      }
+      const { data } = await axios.post(`${AI_SERVICE_URL}/analyze`, analyzeFormData, {
+        headers: { "Content-Type": "multipart/form-data" },
+        timeout: 120000,
       });
       analysis = data;
     } catch (err) {
-      console.warn("[interview] AI service unavailable, using placeholder scores");
+      console.warn("[interview] AI service analysis call failed, using placeholder scores:", err.message);
     }
 
     const fusedScore = Math.round(
@@ -164,23 +170,24 @@ export async function submitResponse(req, res) {
     const maxQuestions = session.maxQuestions || 5;
     if (session.responses.length < maxQuestions) {
       const currentFollowUp = session.followUpCount || 0;
-      const nextQuestion = await generateQuestion(
+      const { question: nextQuestion, type: questionType } = await generateQuestion(
         session.domain,
         session.responses,
         currentFollowUp,
         candidateContext
       );
 
-      if (currentFollowUp >= 2) {
-        session.followUpCount = 0;
-      } else {
+      if (questionType === "follow_up") {
         session.followUpCount = currentFollowUp + 1;
+      } else {
+        session.followUpCount = 0;
       }
 
       session.responses.push({ question: nextQuestion, transcript: "" });
       await session.save();
       return res.json({ done: false, nextQuestion, lastScore: fusedScore });
     }
+
 
     session.status = "completed";
     const scores = session.responses.map((r) => r.fusedScore).filter((s) => s != null);
@@ -221,3 +228,42 @@ export async function getSession(req, res) {
   if (!session) return res.status(404).json({ message: "Session not found" });
   res.json(session);
 }
+
+export async function getUserHistory(req, res) {
+  try {
+    const sessions = await Session.find({
+      user: req.userId,
+      status: "completed",
+    }).sort({ createdAt: -1 });
+
+    const history = sessions.map((s) => {
+      const respCount = s.responses.length || 1;
+      const facialAvg = s.responses.reduce((a, r) => a + (r.facialScore || 0), 0) / respCount;
+      const speechAvg = s.responses.reduce((a, r) => a + (r.speechScore || 0), 0) / respCount;
+      const nlpAvg = s.responses.reduce((a, r) => a + (r.nlpScore || 0), 0) / respCount;
+
+      return {
+        sessionId: s._id,
+        domain: s.domain,
+        targetRole: s.targetRole,
+        experienceLevel: s.experienceLevel,
+        overallScore: s.overallScore || 0,
+        guidance: s.guidance,
+        createdAt: s.createdAt,
+        questionCount: s.responses.length,
+        averages: {
+          facial: Math.round(facialAvg),
+          speech: Math.round(speechAvg),
+          nlp: Math.round(nlpAvg),
+        },
+        responses: s.responses,
+      };
+    });
+
+    res.json({ history });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Could not fetch session history" });
+  }
+}
+

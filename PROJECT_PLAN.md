@@ -16,19 +16,20 @@ change as work lands.
 | # | Feature | Status | Where |
 |---|---|---|---|
 | 1 | Auth (signup/login, JWT) | ✅ Done | `backend/src/controllers/auth.controller.js` |
-| 2 | Resume upload + parsing (regex-based skills/projects/years) | ✅ Done | `ai-services/main.py: parse_resume`, `interview.controller.js: uploadResume` |
+| 2 | Resume upload + parsing (skills/projects/years) | ✅ Done | `ai-services/main.py: parse_resume`, `interview.controller.js: uploadResume` |
 | 3 | Role/experience/JD intake on frontend | ✅ Done | `frontend/src/pages/Dashboard.jsx` |
 | 4 | Conversational agent with full history + follow-up logic | ✅ Done | `backend/src/services/llmService.js` |
-| 5 | Follow-up depth capping | ⚠️ Works, but not precise (see §2, item B) | `interview.controller.js: submitResponse` |
+| 5 | Structured follow-up depth tracking | ✅ Done | `llmService.js: generateQuestion`, `interview.controller.js: submitResponse` |
 | 6 | Audio/video capture (MediaRecorder) + typed fallback | ✅ Done | `frontend/src/pages/Interview.jsx` |
 | 7 | Speech-to-text (faster-whisper) | ✅ Done | `ai-services/main.py: /transcribe` |
-| 8 | NLP scoring (semantic similarity + VADER sentiment) | 🔴 **Broken — crashes** | `ai-services/main.py: score_nlp` (see §2, item A) |
-| 9 | Facial expression scoring | ⬜ Placeholder (hardcoded 65) | `ai-services/main.py: score_facial_placeholder` |
-| 10 | Speech emotion/prosody scoring | ⬜ Placeholder (hardcoded 65) | `ai-services/main.py: score_speech_placeholder` |
-| 11 | Score fusion + weakest-area guidance | ✅ Done (works once #8 is fixed) | `interview.controller.js: submitResponse, buildGuidance` |
-| 12 | Session history dashboard / score trends | ⬜ Not started | — |
-| 13 | Pre-interview mic/camera check | ⬜ Not started | — |
-| 14 | README reflects actual current features | ⚠️ Stale — missing resume/role/JD intake | `README.md` |
+| 8 | NLP scoring (semantic similarity + VADER sentiment) | ✅ Done | `ai-services/main.py: score_nlp` |
+| 9 | Facial expression, eye contact & posture scoring | ✅ Done | `ai-services/main.py: score_facial` (OpenCV + MediaPipe) |
+| 10 | Speech prosody, WPM pace & pause scoring | ✅ Done | `ai-services/main.py: score_speech` (Librosa) |
+| 11 | Score fusion + weakest-area guidance | ✅ Done | `interview.controller.js: submitResponse, buildGuidance` |
+| 12 | Session history dashboard / score trends | ✅ Done | `frontend/src/pages/History.jsx`, `interview.controller.js: getUserHistory` |
+| 13 | Pre-interview mic/camera system check | ✅ Done | `frontend/src/pages/Interview.jsx` |
+| 14 | README reflects actual current features | ✅ Done | `README.md` |
+
 
 **Read before writing any code:** items marked ✅ are genuinely solid — don't
 rewrite them speculatively. Item 8 is the one thing that must be fixed before

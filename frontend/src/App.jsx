@@ -3,6 +3,7 @@ import Login from "./pages/Login.jsx";
 import Signup from "./pages/Signup.jsx";
 import Dashboard from "./pages/Dashboard.jsx";
 import Interview from "./pages/Interview.jsx";
+import History from "./pages/History.jsx";
 
 function isAuthed() {
   return Boolean(localStorage.getItem("token"));
@@ -20,6 +21,12 @@ export default function App() {
           Multimodal AI Interviewer
         </Link>
         <div className="space-x-4 text-sm">
+          <Link to="/" className="text-slate-600 hover:text-slate-900 font-medium">
+            New Practice
+          </Link>
+          <Link to="/history" className="text-slate-600 hover:text-slate-900 font-medium">
+            History & Progress
+          </Link>
           <Link to="/login" className="text-slate-600 hover:text-slate-900">
             Login
           </Link>
@@ -37,6 +44,14 @@ export default function App() {
           element={
             <Protected>
               <Dashboard />
+            </Protected>
+          }
+        />
+        <Route
+          path="/history"
+          element={
+            <Protected>
+              <History />
             </Protected>
           }
         />
