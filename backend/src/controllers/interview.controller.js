@@ -83,13 +83,15 @@ export async function startSession(req, res) {
       jobDescription: session.jobDescription,
       skills: user?.resume?.skills || [],
       projects: user?.resume?.projects || [],
+      yearsExperience: user?.resume?.yearsExperience || 0,
     };
 
-    const { question } = await generateQuestion(session.domain, session.responses, 0, candidateContext);
-    session.responses.push({ question, transcript: "" });
+    const result = await generateQuestion(session.domain, session.responses, 0, candidateContext);
+    console.log(`[llm] Question source: ${result.source || "llm"} | type: ${result.type} | q: "${result.question.slice(0, 60)}..."`);
+    session.responses.push({ question: result.question, transcript: "" });
     await session.save();
 
-    res.status(201).json({ sessionId: session._id, question, maxQuestions: session.maxQuestions });
+    res.status(201).json({ sessionId: session._id, question: result.question, maxQuestions: session.maxQuestions });
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: "Could not start session" });
@@ -116,6 +118,7 @@ export async function submitResponse(req, res) {
       jobDescription: session.jobDescription,
       skills: user?.resume?.skills || [],
       projects: user?.resume?.projects || [],
+      yearsExperience: user?.resume?.yearsExperience || 0,
     };
 
     const current = session.responses.at(-1);
@@ -129,9 +132,13 @@ export async function submitResponse(req, res) {
           headers: { "Content-Type": "multipart/form-data" },
           timeout: 120000,
         });
-        transcript = data.transcript;
+        if (data.transcript && data.transcript.trim()) {
+          if (!transcript || !transcript.trim()) {
+            transcript = data.transcript;
+          }
+        }
       } catch (err) {
-        console.warn("[interview] Audio transcription failed, using typed answer:", err.message);
+        console.warn("[interview] Audio transcription failed, using live/typed answer:", err.message);
       } finally {
         if (fs.existsSync(mediaFile.path)) fs.unlinkSync(mediaFile.path);
       }

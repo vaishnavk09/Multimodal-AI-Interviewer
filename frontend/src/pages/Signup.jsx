@@ -17,6 +17,7 @@ export default function Signup() {
     try {
       const { data } = await api.post("/auth/signup", form);
       localStorage.setItem("token", data.token);
+      localStorage.setItem("user", JSON.stringify(data.user));
       navigate("/");
     } catch (err) {
       setError(err.response?.data?.message || "Signup failed");
@@ -24,23 +25,29 @@ export default function Signup() {
   }
 
   return (
-    <div className="max-w-sm mx-auto mt-16 bg-white p-8 rounded-xl shadow">
-      <h1 className="text-xl font-semibold mb-6">Create account</h1>
+    <div className="auth-layout">
+      <div className="auth-card surface-card">
+      <div className="mb-7 text-center">
+        <span className="brand-mark w-10 h-10 text-sm font-black mx-auto mb-4">AI</span>
+        <p className="auth-kicker mb-2">Your next strong answer</p>
+        <h1 className="page-title text-2xl font-bold text-slate-900">Create account</h1>
+      </div>
       <form onSubmit={handleSubmit} className="space-y-4">
-        <input className="w-full border rounded px-3 py-2" placeholder="Name" value={form.name} onChange={update("name")} required />
-        <input className="w-full border rounded px-3 py-2" type="email" placeholder="Email" value={form.email} onChange={update("email")} required />
-        <input className="w-full border rounded px-3 py-2" type="password" placeholder="Password" value={form.password} onChange={update("password")} required />
-        <select className="w-full border rounded px-3 py-2" value={form.domain} onChange={update("domain")}>
+        <input className="form-control w-full px-3.5 py-3 text-sm" placeholder="Full name" value={form.name} onChange={update("name")} required />
+        <input className="form-control w-full px-3.5 py-3 text-sm" type="email" placeholder="Email address" value={form.email} onChange={update("email")} required />
+        <input className="form-control w-full px-3.5 py-3 text-sm" type="password" placeholder="Password" value={form.password} onChange={update("password")} required />
+        <select className="form-control w-full px-3.5 py-3 text-sm" value={form.domain} onChange={update("domain")}>
           <option>Software Engineering</option>
           <option>Data Science</option>
           <option>General</option>
         </select>
         {error && <p className="text-red-600 text-sm">{error}</p>}
-        <button className="w-full bg-slate-900 text-white rounded py-2">Sign up</button>
+        <button className="primary-action w-full rounded-xl py-3 font-semibold text-sm">Sign up</button>
       </form>
       <p className="text-sm text-slate-500 mt-4">
         Already have an account? <Link to="/login" className="underline">Log in</Link>
       </p>
+      </div>
     </div>
   );
 }

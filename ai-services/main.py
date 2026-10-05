@@ -164,6 +164,7 @@ def extract_resume_info(text: str) -> dict:
 async def analyze(
     question: str = Form(...),
     transcript: str = Form(...),
+    experience_level: str = Form("Fresher"),
     file: UploadFile = File(None)
 ):
     temp_path = None
@@ -179,7 +180,7 @@ async def analyze(
             print(f"[ai-services] Failed to save media for analyze: {e}")
 
     try:
-        nlp_score, nlp_feedback = score_nlp(question, transcript)
+        nlp_score, nlp_feedback = score_nlp(question, transcript, experience_level)
         facial_score = score_facial(temp_path) if temp_path else score_facial_placeholder()
         speech_score = score_speech(temp_path, transcript) if temp_path else score_speech_placeholder()
 
@@ -189,6 +190,7 @@ async def analyze(
         if speech_score < 60:
             feedback_parts.append("Slow down slightly and reduce filler words for clearer delivery.")
 
+        print(f"[analyze] experience={experience_level} | nlp={nlp_score} | facial={facial_score} | speech={speech_score}")
         return AnalyzeResponse(
             facialScore=facial_score,
             speechScore=speech_score,
@@ -203,10 +205,15 @@ async def analyze(
                 pass
 
 
-def score_nlp(question: str, transcript: str) -> tuple[int, str]:
+def score_nlp(question: str, transcript: str, experience_level: str = "Fresher") -> tuple[int, str]:
     """
     NLP scoring: calculates semantic similarity between question and candidate transcript,
     plus VADER sentiment compound score for overall tone alignment.
+    Applies adaptive difficulty scaling based on experience level:
+      - Fresher:  base score (no penalty)
+      - 1-3 yrs:  -8 point senior bar
+      - 3+ yrs:   -15 point senior bar (expected depth / precision)
+    Also rewards answer depth (word count) up to +10 points.
     """
     if not transcript.strip():
         return 0, "No answer was recorded — remember to speak clearly into the microphone."
@@ -223,12 +230,28 @@ def score_nlp(question: str, transcript: str) -> tuple[int, str]:
     compound = sentiment_analyzer.polarity_scores(transcript)["compound"]  # -1..1
     tone_adjustment = compound * 10  # small nudge, content relevance dominates
 
-    final = max(0, min(100, relevance_score + tone_adjustment))
-    feedback = (
-        "Your answer was highly relevant to the question."
-        if final >= 75
-        else "Try to tie your answer more directly back to the question asked."
-    )
+    # Depth bonus: reward well-developed answers (up to +10 pts for 80+ words)
+    word_count = len(transcript.split())
+    depth_bonus = min(10, (word_count / 80) * 10)
+
+    raw_score = relevance_score + tone_adjustment + depth_bonus
+
+    # Experience-level difficulty scaling: senior candidates are held to a higher bar
+    difficulty_penalty = 0
+    if experience_level == "1-3 yrs":
+        difficulty_penalty = 8
+    elif experience_level == "3+ yrs":
+        difficulty_penalty = 15
+
+    final = max(0, min(100, raw_score - difficulty_penalty))
+
+    if final >= 75:
+        feedback = "Strong answer — well-structured and directly relevant to the question."
+    elif final >= 50:
+        feedback = "Decent answer. Try to add more specific examples or technical depth."
+    else:
+        feedback = "Try to tie your answer more directly back to the question asked and include concrete examples."
+
     return round(final), feedback
 
 

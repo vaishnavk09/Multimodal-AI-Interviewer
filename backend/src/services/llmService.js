@@ -1,12 +1,18 @@
 import axios from "axios";
 
-const GEMINI_URL =
-  "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent";
+const GEMINI_MODELS = [
+  "gemini-3.6-flash",
+  "gemini-3.5-flash",
+  "gemini-2.5-flash-lite",
+  "gemini-flash-latest",
+  "gemini-3.7-flash",
+  "gemini-3.1-flash-lite",
+];
 
 /**
- * Generates a domain-specific interview question using Gemini 2.5 Flash (free tier).
+ * Generates a domain-specific interview question using Gemini Flash API.
  * Takes the domain, past response history, and followUpCount.
- * Falls back to a static question bank if the API key is missing or the call fails.
+ * Falls back to a static question bank if the API key is missing or calls fail.
  */
 export async function generateQuestion(
   domain,
@@ -66,41 +72,50 @@ Return JSON ONLY in this format: {"type": "follow_up" | "new_topic", "question":
   }
 
   if (!apiKey) {
+    console.warn("[llmService] No GEMINI_API_KEY set — using fallback question bank");
     return fallbackQuestion(domain, validHistory.length);
   }
 
-  try {
-    const { data } = await axios.post(
-      `${GEMINI_URL}?key=${apiKey}`,
-      { contents: [{ parts: [{ text: prompt }] }] },
-      { timeout: 8000 }
-    );
-    let text = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
-    if (text) {
-      // Clean potential markdown backticks ```json ... ```
-      text = text.replace(/```json/g, "").replace(/```/g, "").trim();
-      try {
-        const parsed = JSON.parse(text);
-        if (parsed && parsed.question) {
+  for (const model of GEMINI_MODELS) {
+    try {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+      const { data } = await axios.post(
+        url,
+        { contents: [{ parts: [{ text: prompt }] }] },
+        { timeout: 8000 }
+      );
+      let text = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+      if (text) {
+        // Clean potential markdown backticks ```json ... ```
+        text = text.replace(/```json/gi, "").replace(/```/g, "").trim();
+        try {
+          const parsed = JSON.parse(text);
+          if (parsed && parsed.question) {
+            console.log(`[llmService] Generated question using Gemini (${model})`);
+            return {
+              question: parsed.question.trim(),
+              type: parsed.type === "follow_up" ? "follow_up" : "new_topic",
+              source: "llm",
+            };
+          }
+        } catch (e) {
+          // Fallback text parsing if not valid JSON
+          text = text.replace(/^["']|["']$/g, "").trim();
+          console.log(`[llmService] Generated question text using Gemini (${model})`);
           return {
-            question: parsed.question.trim(),
-            type: parsed.type === "follow_up" ? "follow_up" : "new_topic",
+            question: text,
+            type: validHistory.length === 0 ? "new_topic" : "follow_up",
+            source: "llm",
           };
         }
-      } catch (e) {
-        // Fallback text parsing if not valid JSON
-        text = text.replace(/^["']|["']$/g, "").trim();
-        return {
-          question: text,
-          type: validHistory.length === 0 ? "new_topic" : "follow_up",
-        };
       }
+    } catch (err) {
+      console.error(`[llmService] Gemini model ${model} call failed:`, err.response?.data?.error?.message || err.message);
     }
-    return fallbackQuestion(domain, validHistory.length);
-  } catch (err) {
-    console.error("[llmService] Gemini call failed, using fallback:", err.message);
-    return fallbackQuestion(domain, validHistory.length);
   }
+
+  console.warn("[llmService] All Gemini model calls failed, using fallback question bank");
+  return fallbackQuestion(domain, validHistory.length);
 }
 
 function fallbackQuestion(domain, turnIndex = 0) {
@@ -132,6 +147,7 @@ function fallbackQuestion(domain, turnIndex = 0) {
   return {
     question: list[turnIndex % list.length],
     type: isFollowUp ? "follow_up" : "new_topic",
+    source: "fallback",
   };
 }
 

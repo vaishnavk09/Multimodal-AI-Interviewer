@@ -48,10 +48,30 @@ export async function login(req, res) {
     const token = signToken(user._id);
     res.json({
       token,
-      user: { id: user._id, name: user.name, email: user.email, domain: user.domain },
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        domain: user.domain,
+        targetRole: user.targetRole,
+        experienceLevel: user.experienceLevel,
+        resume: user.resume ?? null,
+      },
     });
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: "Login failed" });
+  }
+}
+
+export async function getMe(req, res) {
+  try {
+    const user = await User.findById(req.userId).lean();
+    if (!user) return res.status(404).json({ message: "User not found" });
+    const { passwordHash, __v, ...safe } = user;
+    res.json(safe);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Could not fetch profile" });
   }
 }

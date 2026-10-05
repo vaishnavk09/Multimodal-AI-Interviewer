@@ -1,0 +1,115 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-09-17T00:00:00.000Z",
+  "title": "Design System: InterviewCoach",
+  "extensions": {
+    "colorMeta": {
+      "ink": { "role": "neutral", "displayName": "Ink Navy", "canonical": "#182329", "tonalRamp": ["#182329", "#27353a", "#3b4a4f", "#526267", "#6d7b7f", "#899597", "#aab5b5", "#eef3f2"] },
+      "wash": { "role": "neutral", "displayName": "Desk Canvas", "canonical": "#eef3f2", "tonalRamp": ["#182329", "#31434a", "#526267", "#758689", "#a1aeae", "#c2cdcb", "#dce5e2", "#eef3f2"] },
+      "paper": { "role": "neutral", "displayName": "Paper", "canonical": "#ffffff", "tonalRamp": ["#182329", "#3a474b", "#5d696c", "#7e898b", "#a0a9aa", "#bdc4c4", "#dfe3e2", "#ffffff"] },
+      "accent": { "role": "primary", "displayName": "Working Coral", "canonical": "#e5664d", "tonalRamp": ["#4d211b", "#783227", "#9d4133", "#bd5140", "#d86650", "#e98773", "#f2ae9e", "#ffe4dc"] },
+      "teal": { "role": "secondary", "displayName": "Verified Teal", "canonical": "#0c8179", "tonalRamp": ["#062e2c", "#07514d", "#086864", "#0c8179", "#389a91", "#6bb4aa", "#a4d3cb", "#d9f0eb"] },
+      "saffron": { "role": "tertiary", "displayName": "Attention Saffron", "canonical": "#d79d2c", "tonalRamp": ["#4d3309", "#76500e", "#9d6e17", "#bd871f", "#d79d2c", "#e2b550", "#efd18b", "#fff0c9"] }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "IBM Plex Sans Display", "purpose": "Welcome and major page headings." },
+      "title": { "displayName": "IBM Plex Sans Title", "purpose": "Auth headings and compact task titles." },
+      "body": { "displayName": "DM Sans Body", "purpose": "Forms, guidance, analytics, questions, and answers." },
+      "label": { "displayName": "DM Sans Label", "purpose": "Compact status and kicker labels." }
+    },
+    "shadows": [
+      { "name": "nav-lift", "value": "0 8px 22px rgba(24, 35, 41, .05)", "purpose": "Separate the sticky navigation from the desk canvas." },
+      { "name": "surface-lift", "value": "0 16px 40px rgba(24, 35, 41, .07)", "purpose": "Lift auth and signature surfaces." },
+      { "name": "compact-lift", "value": "0 12px 28px rgba(24, 35, 41, .055)", "purpose": "Support dashboard, history, and interview work panels." },
+      { "name": "action-lift", "value": "0 8px 18px rgba(229, 102, 77, .2)", "purpose": "Give coral actions a restrained hover response." }
+    ],
+    "motion": [
+      { "name": "state-transition", "value": ".18s ease", "purpose": "Buttons, links, fields, and status changes." },
+      { "name": "surface-in", "value": ".5s cubic-bezier(.2,.8,.2,1)", "purpose": "Bring dashboard, history, and interview surfaces into view." },
+      { "name": "mic-meter", "value": ".1s linear", "purpose": "Keep live microphone feedback responsive." }
+    ],
+    "breakpoints": [
+      { "name": "sm", "value": "640px" },
+      { "name": "md", "value": "768px" },
+      { "name": "lg", "value": "1024px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Action",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Coral action for starting, submitting, or continuing the practice loop.",
+      "html": "<button class=\"ds-btn-primary\">Start practice</button>",
+      "css": ".ds-btn-primary { display: inline-flex; align-items: center; justify-content: center; width: 100%; background: #e5664d; color: #fff; padding: 12px 16px; border: 0; border-radius: 12px; font: 600 14px/1.5 'DM Sans', sans-serif; transition: transform .18s ease, background .18s ease, box-shadow .18s ease; cursor: pointer; } .ds-btn-primary:hover { background: #bb4938; transform: translateY(-1px); box-shadow: 0 8px 18px rgba(229, 102, 77, .2); } .ds-btn-primary:focus-visible { outline: 3px solid rgba(229, 102, 77, .32); outline-offset: 2px; }"
+    },
+    {
+      "name": "Secondary Action",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Quiet fallback or adjacent action that keeps the type-only path available.",
+      "html": "<button class=\"ds-btn-secondary\">Type answers only</button>",
+      "css": ".ds-btn-secondary { display: inline-flex; align-items: center; justify-content: center; background: #fff; color: #31434a; padding: 12px 16px; border: 1px solid #d8e2df; border-radius: 12px; font: 500 14px/1.5 'DM Sans', sans-serif; transition: background .18s ease, border-color .18s ease; cursor: pointer; } .ds-btn-secondary:hover { background: #f8fbfa; border-color: #a9c0bb; } .ds-btn-secondary:focus-visible { outline: 3px solid rgba(229, 102, 77, .32); outline-offset: 2px; }"
+    },
+    {
+      "name": "Practice Field",
+      "kind": "input",
+      "refersTo": "field",
+      "description": "Resting input language for setup and authentication forms.",
+      "html": "<input class=\"ds-field\" placeholder=\"Target role\" />",
+      "css": ".ds-field { display: block; width: 100%; background: #f8fbfa; color: #182329; padding: 12px 14px; border: 1px solid #d8e2df; border-radius: 11px; font: 400 14px/1.5 'DM Sans', sans-serif; transition: border-color .18s ease, box-shadow .18s ease, background .18s ease; } .ds-field:hover { background: #fff; border-color: #a9c0bb; } .ds-field:focus-visible { background: #fff; border-color: #e5664d; box-shadow: 0 0 0 4px rgba(229, 102, 77, .12); outline: none; }"
+    },
+    {
+      "name": "Sticky Navigation",
+      "kind": "nav",
+      "refersTo": "button-primary",
+      "description": "Slim persistent shell navigation for New Practice, History, and account actions.",
+      "html": "<nav class=\"ds-nav\"><strong class=\"ds-brand\">InterviewCoach</strong><a class=\"ds-nav-link\" href=\"#history\">History</a><button class=\"ds-nav-cta\">Sign up</button></nav>",
+      "css": ".ds-nav { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 16px 24px; background: rgba(255, 255, 255, .94); border-bottom: 1px solid #d8e2df; box-shadow: 0 8px 22px rgba(24, 35, 41, .05); backdrop-filter: blur(12px); } .ds-brand { color: #182329; font: 700 16px/1.2 'IBM Plex Sans', sans-serif; letter-spacing: -.03em; } .ds-nav-link { color: #65767a; font: 600 14px/1.5 'DM Sans', sans-serif; text-decoration: none; } .ds-nav-link:hover { color: #182329; } .ds-nav-cta { background: #e5664d; color: #fff; padding: 6px 14px; border: 0; border-radius: 8px; font: 600 12px/1.5 'DM Sans', sans-serif; } .ds-nav-cta:hover { background: #bb4938; } .ds-nav-cta:focus-visible, .ds-nav-link:focus-visible { outline: 3px solid rgba(229, 102, 77, .32); outline-offset: 2px; }"
+    },
+    {
+      "name": "Surface Card",
+      "kind": "card",
+      "refersTo": "surface-card",
+      "description": "Crisp lightly elevated frame for forms, analytics, auth, and feedback.",
+      "html": "<section class=\"ds-card\"><h2>Setup new practice</h2><p>Tailor the next session to your role.</p></section>",
+      "css": ".ds-card { background: #fff; color: #182329; padding: 24px; border: 1px solid #d8e2df; border-radius: 18px; box-shadow: 0 16px 40px rgba(24, 35, 41, .07); } .ds-card h2 { margin: 0; font: 700 18px/1.25 'IBM Plex Sans', sans-serif; letter-spacing: -.02em; } .ds-card p { margin: 6px 0 0; color: #65767a; font: 400 14px/1.5 'DM Sans', sans-serif; }"
+    },
+    {
+      "name": "Verified Status",
+      "kind": "chip",
+      "refersTo": "status-success",
+      "description": "Teal semantic chip for healthy speech, camera, or session state.",
+      "html": "<span class=\"ds-status-success\"><i></i>Audio detected</span>",
+      "css": ".ds-status-success { display: inline-flex; align-items: center; gap: 8px; background: #d9f0eb; color: #11645e; padding: 8px 12px; border-radius: 12px; font: 600 12px/1.35 'DM Sans', sans-serif; } .ds-status-success i { width: 8px; height: 8px; border-radius: 9999px; background: #0c8179; }"
+    },
+    {
+      "name": "Attention Status",
+      "kind": "chip",
+      "refersTo": "status-attention",
+      "description": "Saffron semantic chip for coaching notes and device limitations.",
+      "html": "<span class=\"ds-status-attention\">Camera access limited</span>",
+      "css": ".ds-status-attention { display: inline-flex; align-items: center; background: #fff0c9; color: #86601c; padding: 8px 12px; border-radius: 12px; font: 600 12px/1.35 'DM Sans', sans-serif; }"
+    },
+    {
+      "name": "Interview Monitor",
+      "kind": "custom",
+      "refersTo": "surface-card",
+      "description": "Dark camera monitor with subordinate live speech and progress status.",
+      "html": "<div class=\"ds-monitor\"><div class=\"ds-monitor-screen\">No camera - text mode</div><span class=\"ds-monitor-status\"><i></i>Listening</span></div>",
+      "css": ".ds-monitor { display: grid; gap: 12px; color: #65767a; font: 500 12px/1.35 'DM Sans', sans-serif; } .ds-monitor-screen { display: grid; place-items: center; aspect-ratio: 16 / 9; padding: 16px; background: #182329; color: #899597; border-radius: 18px; text-align: center; } .ds-monitor-status { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: #d9f0eb; color: #11645e; border: 1px solid #d8e2df; border-radius: 12px; } .ds-monitor-status i { width: 8px; height: 8px; border-radius: 9999px; background: #0c8179; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Practice Desk",
+    "overview": "InterviewCoach is a focused assessment practice desk: a calm working surface where preparation, live answering, and feedback remain part of one repeatable session. The pale blue-grey canvas keeps the app quiet, while ink navy structure gives the work hierarchy and coral marks the next deliberate action.\n\nThe interface is operational and candid rather than gamified. Crisp white surfaces frame real tasks, analytics, and device status; teal verifies healthy progress, and saffron calls out attention or coaching context. Generous page padding and compact labels make the dense workflow scannable across dashboard, interview, history, and auth routes.",
+    "keyCharacteristics": ["Pale blue-grey working canvas with ink navy structure.", "Coral action path, teal verification, and saffron attention states.", "IBM Plex Sans headings paired with DM Sans body copy.", "Lightly elevated white surfaces that frame real work."],
+    "rules": [
+      { "name": "The Signal Economy Rule", "body": "Coral, teal, and saffron are reserved for actions and semantic status; do not turn every surface into an accent block.", "section": "colors" },
+      { "name": "The Working Hierarchy Rule", "body": "Use IBM Plex Sans to announce the task, then let DM Sans carry the explanation and input work.", "section": "typography" },
+      { "name": "The Light-Lift Rule", "body": "Borders establish the container; shadows support hierarchy and state without making the desk feel glossy or theatrical.", "section": "elevation" }
+    ],
+    "dos": ["Do keep the next practice action visibly coral and easy to find.", "Do use ink navy for structure and teal or saffron only when the state earns it.", "Do keep questions and answer entry dominant during live interview work.", "Do preserve keyboard focus visibility with the coral outline treatment.", "Do let the text-only path remain usable when camera or microphone access is unavailable.", "Do use white surfaces to frame real tasks, feedback, and progress rather than decorative feature tiles."],
+    "donts": ["Don't introduce a generic purple AI-dashboard palette.", "Don't flatten every workflow element into a decorative card.", "Don't use accent colors as ornamental gradients or large competing backgrounds.", "Don't hide device limitations or make camera access a prerequisite for typed answers.", "Don't replace IBM Plex Sans headings and DM Sans working copy with a system-only type pairing."]
+  }
+}
