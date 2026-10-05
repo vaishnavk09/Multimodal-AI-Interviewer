@@ -1,4 +1,5 @@
 import axios from "axios";
+import { STAGE_DESCRIPTIONS } from "./interviewPlan.js";
 
 const GEMINI_MODELS = [
   "gemini-3.6-flash",
@@ -11,14 +12,16 @@ const GEMINI_MODELS = [
 
 /**
  * Generates a domain-specific interview question using Gemini Flash API.
- * Takes the domain, past response history, and followUpCount.
+ * Takes the domain, past response history, followUpCount, candidateContext,
+ * and the current interview stage.
  * Falls back to a static question bank if the API key is missing or calls fail.
  */
 export async function generateQuestion(
   domain,
   history = [],
   followUpCount = 0,
-  candidateContext = null
+  candidateContext = null,
+  stage = "intro"
 ) {
   const apiKey = process.env.GEMINI_API_KEY;
 
@@ -41,10 +44,15 @@ export async function generateQuestion(
     }
   }
 
+  const stageInstruction = STAGE_DESCRIPTIONS[stage]
+    ? `Current interview stage: "${stage}". ${STAGE_DESCRIPTIONS[stage]}`
+    : "";
+
   let prompt = "";
   if (validHistory.length === 0) {
     prompt = `You are an expert technical interviewer conducting a mock interview for the domain "${domain}".
-${contextSnippet}Ask ONE concise opening interview question. Ground the question in the candidate's target role, experience level, or specific listed projects/skills if provided.
+${contextSnippet}${stageInstruction}
+Ask ONE concise question appropriate for this stage. Ground it in the candidate's target role, experience level, or specific listed projects/skills if relevant to this stage.
 Return JSON ONLY in this format: {"type": "new_topic", "question": "..."}`;
   } else {
     const historyText = validHistory
@@ -63,7 +71,9 @@ Return JSON ONLY in this format: {"type": "new_topic", "question": "..."}`;
 
     prompt = `You are an expert technical interviewer conducting a mock interview for the domain "${domain}".
 
-${contextSnippet}Here is the conversation history so far:
+${contextSnippet}${stageInstruction}
+
+Here is the conversation history so far:
 ${historyText}
 
 ${followUpConstraint}
@@ -73,7 +83,7 @@ Return JSON ONLY in this format: {"type": "follow_up" | "new_topic", "question":
 
   if (!apiKey) {
     console.warn("[llmService] No GEMINI_API_KEY set — using fallback question bank");
-    return fallbackQuestion(domain, validHistory.length);
+    return fallbackQuestion(domain, stage, validHistory.length);
   }
 
   for (const model of GEMINI_MODELS) {
@@ -115,40 +125,49 @@ Return JSON ONLY in this format: {"type": "follow_up" | "new_topic", "question":
   }
 
   console.warn("[llmService] All Gemini model calls failed, using fallback question bank");
-  return fallbackQuestion(domain, validHistory.length);
+  return fallbackQuestion(domain, stage, validHistory.length);
 }
 
-function fallbackQuestion(domain, turnIndex = 0) {
+function fallbackQuestion(domain, stage, turnIndex = 0) {
   const bank = {
-    "Software Engineering": [
-      "Explain the difference between a process and a thread.",
-      "Can you expand on how memory management differs between processes and threads?",
-      "How do microservices communicate synchronously vs asynchronously?",
-      "What are index structures in database management systems?",
-      "How would you design a rate limiter for a REST API?",
-    ],
-    "Data Science": [
-      "How would you handle missing values in a dataset?",
-      "What specific techniques would you use if the data is missing systematically rather than randomly?",
-      "Explain the bias-variance tradeoff in machine learning.",
-      "How do you evaluate a model when dealing with severe class imbalance?",
-      "What is the difference between L1 and L2 regularization?",
-    ],
-    General: [
-      "Tell me about a challenging project you worked on.",
-      "What was your specific technical role in that project and what trade-offs did you make?",
-      "Describe a situation where a technical project didn't go as planned.",
-      "How do you prioritize competing priorities when deadline pressures arise?",
-      "What is one technical skill you have recently improved, and how did you do it?",
-    ],
+    "Software Engineering": {
+      intro: ["Tell me a bit about yourself and your background."],
+      experience: ["Walk me through a project you're proud of — what was your specific role?"],
+      technical: [
+        "Explain the difference between a process and a thread.",
+        "How would you design a rate limiter for a REST API?",
+        "What are index structures in database management systems?",
+      ],
+      behavioral: ["Describe a situation where a technical project didn't go as planned."],
+      closing: ["Do you have any questions for me about the role?"],
+    },
+    "Data Science": {
+      intro: ["Tell me about your background and what drew you to data science."],
+      experience: ["Walk me through a data project you worked on end-to-end — from data collection to results."],
+      technical: [
+        "How would you handle missing values in a dataset?",
+        "Explain the bias-variance tradeoff in machine learning.",
+        "What is the difference between L1 and L2 regularization?",
+      ],
+      behavioral: ["How do you prioritize competing priorities when deadline pressures arise?"],
+      closing: ["Is there anything else you'd like to share about your data science experience?"],
+    },
+    General: {
+      intro: ["Tell me about yourself and your professional background."],
+      experience: ["Tell me about a challenging project you worked on and your specific role in it."],
+      technical: [
+        "What is one technical skill you have recently improved, and how did you do it?",
+        "How do you approach learning a new technology or framework?",
+      ],
+      behavioral: ["Describe a situation where you had to work with a difficult team member."],
+      closing: ["Do you have any questions for me about the role?"],
+    },
   };
-  const list = bank[domain] || bank.General;
-  const isFollowUp = turnIndex % 2 === 1;
+  const domainBank = bank[domain] || bank.General;
+  const pool = domainBank[stage] || domainBank.technical;
   return {
-    question: list[turnIndex % list.length],
-    type: isFollowUp ? "follow_up" : "new_topic",
+    question: pool[turnIndex % pool.length],
+    type: "new_topic", // fallback doesn't attempt follow-up logic
     source: "fallback",
   };
 }
-
-

@@ -24,6 +24,8 @@ const sessionSchema = new mongoose.Schema(
     status: { type: String, enum: ["in_progress", "completed"], default: "in_progress" },
     responses: [responseSchema],
     followUpCount: { type: Number, default: 0 },
+    stagePlan: { type: [String], default: [] },
+    stageIndex: { type: Number, default: 0 },
     overallScore: { type: Number, default: null },
     guidance: { type: String, default: "" }, // personalized prep plan text
   },

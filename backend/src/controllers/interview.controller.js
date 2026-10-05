@@ -3,6 +3,7 @@ import axios from "axios";
 import Session from "../models/Session.js";
 import User from "../models/User.js";
 import { generateQuestion } from "../services/llmService.js";
+import { buildStagePlan } from "../services/interviewPlan.js";
 
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL || "http://localhost:8000";
 
@@ -59,6 +60,8 @@ export async function startSession(req, res) {
     if (experienceLevel === "1-3 yrs") maxQuestions = 6;
     else if (experienceLevel === "3+ yrs") maxQuestions = 8;
 
+    const stagePlan = buildStagePlan(maxQuestions);
+
     const session = await Session.create({
       user: req.userId,
       domain: domain || user?.domain || "General",
@@ -68,6 +71,8 @@ export async function startSession(req, res) {
       maxQuestions,
       responses: [],
       followUpCount: 0,
+      stagePlan,
+      stageIndex: 0,
     });
 
     if (user) {
@@ -86,8 +91,9 @@ export async function startSession(req, res) {
       yearsExperience: user?.resume?.yearsExperience || 0,
     };
 
-    const result = await generateQuestion(session.domain, session.responses, 0, candidateContext);
-    console.log(`[llm] Question source: ${result.source || "llm"} | type: ${result.type} | q: "${result.question.slice(0, 60)}..."`);
+    const currentStage = stagePlan[0]; // "intro"
+    const result = await generateQuestion(session.domain, session.responses, 0, candidateContext, currentStage);
+    console.log(`[llm] Question source: ${result.source || "llm"} | type: ${result.type} | stage: ${currentStage} | q: "${result.question.slice(0, 60)}..."`);
     session.responses.push({ question: result.question, transcript: "" });
     await session.save();
 
@@ -177,18 +183,25 @@ export async function submitResponse(req, res) {
     const maxQuestions = session.maxQuestions || 5;
     if (session.responses.length < maxQuestions) {
       const currentFollowUp = session.followUpCount || 0;
+      const currentStage = session.stagePlan[session.stageIndex] || "technical";
+
       const { question: nextQuestion, type: questionType } = await generateQuestion(
         session.domain,
         session.responses,
         currentFollowUp,
-        candidateContext
+        candidateContext,
+        currentStage
       );
 
       if (questionType === "follow_up") {
         session.followUpCount = currentFollowUp + 1;
+        // stageIndex does NOT advance — still probing the same stage/topic
       } else {
         session.followUpCount = 0;
+        session.stageIndex = Math.min(session.stageIndex + 1, session.stagePlan.length - 1);
       }
+
+      console.log(`[llm] stage: ${currentStage} (idx ${session.stageIndex}) | type: ${questionType}`);
 
       session.responses.push({ question: nextQuestion, transcript: "" });
       await session.save();
@@ -206,6 +219,30 @@ export async function submitResponse(req, res) {
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: "Could not process response" });
+  }
+}
+
+/**
+ * Lightweight proxy for partial/chunked transcription during recording.
+ * Sends accumulated audio to the AI service's /transcribe endpoint and
+ * returns the transcript. Used as a server-side fallback for browsers
+ * without Web Speech API support.
+ */
+export async function transcribePartial(req, res) {
+  if (!req.file) return res.status(400).json({ transcript: "" });
+  try {
+    const buffer = fs.readFileSync(req.file.path);
+    const formData = new FormData();
+    formData.append("file", new Blob([buffer]), req.file.originalname);
+    const { data } = await axios.post(`${AI_SERVICE_URL}/transcribe`, formData, {
+      headers: { "Content-Type": "multipart/form-data" },
+      timeout: 20000, // shorter timeout than final submit — this is a background poll, fail fast
+    });
+    res.json({ transcript: data.transcript || "" });
+  } catch (err) {
+    res.json({ transcript: "" }); // silent fail is fine here, it's just a convenience poll
+  } finally {
+    if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
   }
 }
 
@@ -273,4 +310,3 @@ export async function getUserHistory(req, res) {
     res.status(500).json({ message: "Could not fetch session history" });
   }
 }
-

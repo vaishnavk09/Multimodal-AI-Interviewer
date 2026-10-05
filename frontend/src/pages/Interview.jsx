@@ -32,6 +32,9 @@ export default function Interview() {
   const [recordedBlob, setRecordedBlob] = useState(null);
   const [speechActive, setSpeechActive] = useState(false);
 
+  // ── STT error state (Part 1.2) ────────────────────────────────────────────
+  const [speechError, setSpeechError] = useState("");
+
   // ── Refs ──────────────────────────────────────────────────────────────────
   const previewVideoRef = useRef(null);   // pre-check preview
   const liveVideoRef = useRef(null);      // during interview
@@ -42,6 +45,15 @@ export default function Interview() {
   const analyserRef = useRef(null);
   const micAnimFrameRef = useRef(null);
   const isRecordingRef = useRef(false);
+  const audioCtxRef = useRef(null);       // Part 1.1: track AudioContext for cleanup
+
+  // ── Part 1.3: Stuck-detector refs ─────────────────────────────────────────
+  const lastResultTimeRef = useRef(null);
+  const stuckTimerRef = useRef(null);
+
+  // ── Part 1.4: Server-side transcription polling refs ──────────────────────
+  const transcribePollRef = useRef(null);
+  const transcribingRef = useRef(false);
 
   // ─────────────────────────────────────────────────────────────────────────
   // Cleanup on unmount
@@ -56,6 +68,21 @@ export default function Interview() {
     streamRef.current = null;
     stopSpeechRecognition();
     if (micAnimFrameRef.current) cancelAnimationFrame(micAnimFrameRef.current);
+    // Part 1.1: Close AudioContext on full stop
+    if (audioCtxRef.current) {
+      audioCtxRef.current.close();
+      audioCtxRef.current = null;
+    }
+    // Part 1.4: Clear transcription polling
+    if (transcribePollRef.current) {
+      clearInterval(transcribePollRef.current);
+      transcribePollRef.current = null;
+    }
+    // Part 1.3: Clear stuck-detector
+    if (stuckTimerRef.current) {
+      clearInterval(stuckTimerRef.current);
+      stuckTimerRef.current = null;
+    }
   }
 
   // Auto-fetch question if arrived via direct link
@@ -104,9 +131,11 @@ export default function Interview() {
     }
   }
 
+  // Part 1.1: Store AudioContext in ref for later cleanup
   function startMicLevelMeter(stream) {
     try {
       const ctx = new AudioContext();
+      audioCtxRef.current = ctx; // store it so it can be closed later
       const source = ctx.createMediaStreamSource(stream);
       const analyser = ctx.createAnalyser();
       analyser.fftSize = 256;
@@ -165,6 +194,11 @@ export default function Interview() {
 
   function proceedToInterview() {
     if (micAnimFrameRef.current) cancelAnimationFrame(micAnimFrameRef.current);
+    // Part 1.1: Close AudioContext from device-check phase
+    if (audioCtxRef.current) {
+      audioCtxRef.current.close();
+      audioCtxRef.current = null;
+    }
     setDeviceCheckDone(true);
     // Keep stream alive; bind to live video
     setTimeout(() => {
@@ -187,6 +221,7 @@ export default function Interview() {
   function startRecording() {
     if (!streamRef.current) return;
     chunksRef.current = [];
+    setSpeechError(""); // Clear any previous speech errors
     const recorder = new MediaRecorder(streamRef.current, {
       mimeType: MediaRecorder.isTypeSupported("video/webm;codecs=vp8,opus")
         ? "video/webm;codecs=vp8,opus"
@@ -204,6 +239,27 @@ export default function Interview() {
     isRecordingRef.current = true;
     setIsRecording(true);
     startSpeechRecognition();
+
+    // Part 1.4: Poll every 6s — send accumulated audio for server-side transcript
+    transcribePollRef.current = setInterval(async () => {
+      if (transcribingRef.current || chunksRef.current.length === 0) return;
+      transcribingRef.current = true;
+      try {
+        const blobSoFar = new Blob(chunksRef.current, { type: "video/webm" });
+        const formData = new FormData();
+        formData.append("file", blobSoFar, "partial.webm");
+        const { data } = await api.post(`/interview/transcribe-partial`, formData);
+        if (data.transcript && data.transcript.trim()) {
+          // Only use this if Web Speech API hasn't already produced text —
+          // avoid fighting with it if the browser path is working fine.
+          setTranscript((prev) => (prev.trim() ? prev : data.transcript.trim()));
+        }
+      } catch (err) {
+        console.warn("[partial-transcribe] failed:", err.message);
+      } finally {
+        transcribingRef.current = false;
+      }
+    }, 6000);
   }
 
   function stopCurrentRecording() {
@@ -213,6 +269,16 @@ export default function Interview() {
     isRecordingRef.current = false;
     setIsRecording(false);
     stopSpeechRecognition();
+    // Part 1.4: Clear transcription polling
+    if (transcribePollRef.current) {
+      clearInterval(transcribePollRef.current);
+      transcribePollRef.current = null;
+    }
+    // Part 1.3: Clear stuck-detector
+    if (stuckTimerRef.current) {
+      clearInterval(stuckTimerRef.current);
+      stuckTimerRef.current = null;
+    }
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -238,9 +304,28 @@ export default function Interview() {
 
       recognition.onstart = () => {
         setSpeechActive(true);
+        // Part 1.3: Reset stuck-detector when recognition starts
+        lastResultTimeRef.current = Date.now();
+        if (stuckTimerRef.current) clearInterval(stuckTimerRef.current);
+        stuckTimerRef.current = setInterval(() => {
+          if (
+            lastResultTimeRef.current &&
+            Date.now() - lastResultTimeRef.current > 10000
+          ) {
+            setSpeechError(
+              "Live transcription seems stuck — you can keep typing your answer."
+            );
+            clearInterval(stuckTimerRef.current);
+            stuckTimerRef.current = null;
+          }
+        }, 2000);
       };
 
       recognition.onresult = (event) => {
+        // Part 1.3: Update last result time
+        lastResultTimeRef.current = Date.now();
+        setSpeechError(""); // Clear any stuck error
+
         let finalChunk = "";
         let interimChunk = "";
         for (let i = event.resultIndex; i < event.results.length; i++) {
@@ -261,6 +346,11 @@ export default function Interview() {
       recognition.onend = () => {
         setSpeechActive(false);
         setInterimText("");
+        // Part 1.3: Clear stuck-detector on end
+        if (stuckTimerRef.current) {
+          clearInterval(stuckTimerRef.current);
+          stuckTimerRef.current = null;
+        }
         // Auto-restart with fresh recognition instance if still recording
         if (isRecordingRef.current) {
           setTimeout(() => {
@@ -271,10 +361,18 @@ export default function Interview() {
         }
       };
 
+      // Part 1.2: Surface STT errors to the user
       recognition.onerror = (e) => {
         console.warn("[speech] recognition error:", e.error);
         if (e.error === "not-allowed" || e.error === "service-not-allowed") {
           isRecordingRef.current = false;
+          setSpeechError("Microphone permission was denied — please type your answer.");
+        } else if (e.error === "network") {
+          setSpeechError("Live transcription needs an internet connection and isn't reachable right now — please type your answer, or check your connection.");
+        } else if (e.error === "no-speech") {
+          // benign, happens during silence — don't surface as an error
+        } else {
+          setSpeechError("Live transcription hit an issue — you can keep typing your answer.");
         }
       };
 
@@ -292,6 +390,11 @@ export default function Interview() {
     }
     setSpeechActive(false);
     setInterimText("");
+    // Part 1.3: Clear stuck-detector
+    if (stuckTimerRef.current) {
+      clearInterval(stuckTimerRef.current);
+      stuckTimerRef.current = null;
+    }
   }
 
   function toggleManualSpeech() {
@@ -339,6 +442,7 @@ export default function Interview() {
         setFeedback({ lastScore: data.lastScore });
         setTranscript("");
         setInterimText("");
+        setSpeechError("");
         setRecordedBlob(null);
         chunksRef.current = [];
         // Re-start recording for next question
@@ -462,7 +566,7 @@ export default function Interview() {
                 onClick={proceedToInterview}
                 className="flex-1 bg-indigo-600 text-white rounded-xl py-3 font-semibold text-sm hover:bg-indigo-700 transition"
               >
-                ✅ All Good — Start Interview
+              ✅ All Good — Start Interview
               </button>
             )}
             {checkStep === "idle" && (
@@ -655,6 +759,13 @@ export default function Interview() {
                 )}
               </div>
             </div>
+
+            {/* Part 1.2: Speech error banner */}
+            {speechError && (
+              <div className="bg-amber-50 border border-amber-200 text-amber-800 text-xs px-3.5 py-2.5 rounded-xl">
+                ⚠️ {speechError}
+              </div>
+            )}
 
             {/* Combined real text + interim ghost text */}
             <div className="relative">
