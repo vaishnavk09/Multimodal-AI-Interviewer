@@ -2,7 +2,11 @@ import io
 import os
 import re
 import tempfile
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+import asyncio
+import audioop
+import wave
+import struct
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 from sentence_transformers import SentenceTransformer, util
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
@@ -10,6 +14,7 @@ import pypdf
 import docx
 
 _whisper_model = None
+_whisper_model_live = None
 
 app = FastAPI(title="Multimodal AI Interviewer - Analysis Service")
 

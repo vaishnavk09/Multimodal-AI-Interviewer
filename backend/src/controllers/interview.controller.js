@@ -114,8 +114,11 @@ export async function submitResponse(req, res) {
     const { sessionId } = req.params;
     let { transcript } = req.body;
 
-    const session = await Session.findById(sessionId);
+    const session = await Session.findOne({ _id: sessionId, user: req.userId });
     if (!session) return res.status(404).json({ message: "Session not found" });
+    if (session.status === "completed") {
+      return res.status(409).json({ message: "This interview session is already completed" });
+    }
 
     const user = await User.findById(session.user);
     const candidateContext = {
@@ -128,10 +131,14 @@ export async function submitResponse(req, res) {
     };
 
     const current = session.responses.at(-1);
+    if (!current) {
+      return res.status(409).json({ message: "Interview session has no active question" });
+    }
     const mediaFile = req.files?.audio?.[0] || req.files?.video?.[0];
+    let mediaBuffer = null;
     if (mediaFile) {
       try {
-        const mediaBuffer = fs.readFileSync(mediaFile.path);
+        mediaBuffer = fs.readFileSync(mediaFile.path);
         const formData = new FormData();
         formData.append("file", new Blob([mediaBuffer]), mediaFile.originalname);
         const { data } = await axios.post(`${AI_SERVICE_URL}/transcribe`, formData, {
@@ -145,8 +152,6 @@ export async function submitResponse(req, res) {
         }
       } catch (err) {
         console.warn("[interview] Audio transcription failed, using live/typed answer:", err.message);
-      } finally {
-        if (fs.existsSync(mediaFile.path)) fs.unlinkSync(mediaFile.path);
       }
     }
     current.transcript = transcript || "";
@@ -157,8 +162,7 @@ export async function submitResponse(req, res) {
       const analyzeFormData = new FormData();
       analyzeFormData.append("question", current.question);
       analyzeFormData.append("transcript", current.transcript);
-      if (mediaFile && fs.existsSync(mediaFile.path)) {
-        const mediaBuffer = fs.readFileSync(mediaFile.path);
+      if (mediaFile && mediaBuffer) {
         analyzeFormData.append("file", new Blob([mediaBuffer]), mediaFile.originalname);
       }
       const { data } = await axios.post(`${AI_SERVICE_URL}/analyze`, analyzeFormData, {
@@ -168,6 +172,10 @@ export async function submitResponse(req, res) {
       analysis = data;
     } catch (err) {
       console.warn("[interview] AI service analysis call failed, using placeholder scores:", err.message);
+    } finally {
+      if (mediaFile && fs.existsSync(mediaFile.path)) {
+        fs.unlinkSync(mediaFile.path);
+      }
     }
 
     const fusedScore = Math.round(
@@ -240,7 +248,8 @@ export async function transcribePartial(req, res) {
     });
     res.json({ transcript: data.transcript || "" });
   } catch (err) {
-    res.json({ transcript: "" }); // silent fail is fine here, it's just a convenience poll
+    console.warn("[interview] Partial transcription failed:", err.message);
+    res.status(502).json({ message: "Partial transcription is temporarily unavailable" });
   } finally {
     if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
   }
@@ -268,7 +277,7 @@ function buildGuidance(session) {
 }
 
 export async function getSession(req, res) {
-  const session = await Session.findById(req.params.sessionId);
+  const session = await Session.findOne({ _id: req.params.sessionId, user: req.userId });
   if (!session) return res.status(404).json({ message: "Session not found" });
   res.json(session);
 }

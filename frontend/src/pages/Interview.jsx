@@ -32,8 +32,10 @@ export default function Interview() {
   const [recordedBlob, setRecordedBlob] = useState(null);
   const [speechActive, setSpeechActive] = useState(false);
 
-  // ── STT error state (Part 1.2) ────────────────────────────────────────────
+  // ── STT error state & mode tracking ──────────────────────────────────────────
   const [speechError, setSpeechError] = useState("");
+  const [speechErrorTone, setSpeechErrorTone] = useState("warning"); // "warning" | "info"
+  const [webSpeechDisabledState, setWebSpeechDisabledState] = useState(false);
 
   // ── Refs ──────────────────────────────────────────────────────────────────
   const previewVideoRef = useRef(null);   // pre-check preview
@@ -47,6 +49,10 @@ export default function Interview() {
   const isRecordingRef = useRef(false);
   const audioCtxRef = useRef(null);       // Part 1.1: track AudioContext for cleanup
 
+  // Web Speech error & fallback tracking refs
+  const webSpeechFailCountRef = useRef(0);
+  const webSpeechDisabledRef = useRef(false);
+
   // ── Part 1.3: Stuck-detector refs ─────────────────────────────────────────
   const lastResultTimeRef = useRef(null);
   const stuckTimerRef = useRef(null);
@@ -54,6 +60,41 @@ export default function Interview() {
   // ── Part 1.4: Server-side transcription polling refs ──────────────────────
   const transcribePollRef = useRef(null);
   const transcribingRef = useRef(false);
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Partial Transcription Polling
+  // ─────────────────────────────────────────────────────────────────────────
+
+  function speedUpFallbackPolling() {
+    if (transcribePollRef.current) {
+      clearInterval(transcribePollRef.current);
+      transcribePollRef.current = setInterval(runPartialTranscribe, 3500); // faster once it's the sole mechanism
+    }
+  }
+
+  async function runPartialTranscribe() {
+    if (transcribingRef.current || chunksRef.current.length === 0) return;
+    transcribingRef.current = true;
+    try {
+      const blobSoFar = new Blob(chunksRef.current, { type: "video/webm" });
+      const formData = new FormData();
+      formData.append("file", blobSoFar, "partial.webm");
+      const { data } = await api.post(`/interview/transcribe-partial`, formData);
+      if (data.transcript && data.transcript.trim()) {
+        setTranscript((prev) => (prev.trim() ? prev : data.transcript.trim()));
+        if (webSpeechDisabledRef.current) {
+          setSpeechError("Using backup transcription — your answer is being captured.");
+          setSpeechErrorTone("info");
+        } else {
+          setSpeechError("");
+        }
+      }
+    } catch (err) {
+      console.warn("[partial-transcribe] failed:", err.message);
+    } finally {
+      transcribingRef.current = false;
+    }
+  }
 
   // ─────────────────────────────────────────────────────────────────────────
   // Cleanup on unmount
@@ -445,6 +486,9 @@ export default function Interview() {
         setSpeechError("");
         setRecordedBlob(null);
         chunksRef.current = [];
+        webSpeechFailCountRef.current = 0;
+        webSpeechDisabledRef.current = false;
+        setWebSpeechDisabledState(false);
         // Re-start recording for next question
         setTimeout(() => startRecording(), 200);
       }
@@ -743,7 +787,16 @@ export default function Interview() {
                 Your Answer
               </label>
               <div className="flex items-center gap-2">
-                {SpeechRecognition && (
+                <span className="text-xs text-slate-500 flex items-center gap-1.5 font-normal">
+                  {webSpeechDisabledState ? (
+                    <>🔄 Backup transcription (few seconds delay)</>
+                  ) : speechActive ? (
+                    <>⚡ Live transcription active</>
+                  ) : (
+                    <>🎙️ Waiting for speech…</>
+                  )}
+                </span>
+                {SpeechRecognition && !webSpeechDisabledState && (
                   <button
                     type="button"
                     onClick={toggleManualSpeech}
@@ -760,10 +813,14 @@ export default function Interview() {
               </div>
             </div>
 
-            {/* Part 1.2: Speech error banner */}
+            {/* Part 1.2 & Fix 2: Speech error/info banner */}
             {speechError && (
-              <div className="bg-amber-50 border border-amber-200 text-amber-800 text-xs px-3.5 py-2.5 rounded-xl">
-                ⚠️ {speechError}
+              <div className={`text-xs px-3.5 py-2.5 rounded-xl border ${
+                speechErrorTone === "info"
+                  ? "text-indigo-700 bg-indigo-50 border-indigo-200"
+                  : "text-amber-800 bg-amber-50 border-amber-200"
+              }`}>
+                {speechErrorTone === "info" ? "ℹ️" : "⚠️"} {speechError}
               </div>
             )}
 
