@@ -230,31 +230,6 @@ export async function submitResponse(req, res) {
   }
 }
 
-/**
- * Lightweight proxy for partial/chunked transcription during recording.
- * Sends accumulated audio to the AI service's /transcribe endpoint and
- * returns the transcript. Used as a server-side fallback for browsers
- * without Web Speech API support.
- */
-export async function transcribePartial(req, res) {
-  if (!req.file) return res.status(400).json({ transcript: "" });
-  try {
-    const buffer = fs.readFileSync(req.file.path);
-    const formData = new FormData();
-    formData.append("file", new Blob([buffer]), req.file.originalname);
-    const { data } = await axios.post(`${AI_SERVICE_URL}/transcribe`, formData, {
-      headers: { "Content-Type": "multipart/form-data" },
-      timeout: 20000, // shorter timeout than final submit — this is a background poll, fail fast
-    });
-    res.json({ transcript: data.transcript || "" });
-  } catch (err) {
-    console.warn("[interview] Partial transcription failed:", err.message);
-    res.status(502).json({ message: "Partial transcription is temporarily unavailable" });
-  } finally {
-    if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
-  }
-}
-
 // Simple rule-based placeholder for the "personalized guidance" module.
 // Replace with a proper weak-area-detection model later.
 function buildGuidance(session) {

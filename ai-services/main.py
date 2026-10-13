@@ -2,9 +2,10 @@ import io
 import os
 import re
 import tempfile
-import asyncio
-import audioop
-import wave
+try:
+    import audioop
+except ImportError:
+    audioop = None
 import struct
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
@@ -16,7 +17,10 @@ import docx
 _whisper_model = None
 _whisper_model_live = None
 
+from routers.transcribe_stream import router as transcribe_stream_router
+
 app = FastAPI(title="Multimodal AI Interviewer - Analysis Service")
+app.include_router(transcribe_stream_router)
 
 _embedder = None
 _sentiment_analyzer = None

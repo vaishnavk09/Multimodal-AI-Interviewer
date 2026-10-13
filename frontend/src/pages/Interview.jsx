@@ -1,10 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useParams, useLocation, Link } from "react-router-dom";
 import api from "../api.js";
-
-// ─── Web Speech API check ───────────────────────────────────────────────────
-const SpeechRecognition =
-  window.SpeechRecognition || window.webkitSpeechRecognition || null;
+import TranscriptPanel from "../components/TranscriptPanel.jsx";
 
 export default function Interview() {
   const { sessionId } = useParams();
@@ -15,7 +12,7 @@ export default function Interview() {
   const [questionNum, setQuestionNum] = useState(1);
   const [maxQuestions, setMaxQuestions] = useState(location.state?.maxQuestions || 5);
   const [transcript, setTranscript] = useState("");
-  const [interimText, setInterimText] = useState("");
+  const [partialWord, setPartialWord] = useState("");
   const [feedback, setFeedback] = useState(null);
   const [done, setDone] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -27,15 +24,12 @@ export default function Interview() {
   const [personDetected, setPersonDetected] = useState(null); // null | true | false
   const [captureError, setCaptureError] = useState("");
 
-  // ── Recording state ───────────────────────────────────────────────────────
+  // ── Recording & WebSocket state ───────────────────────────────────────────
   const [isRecording, setIsRecording] = useState(false);
   const [recordedBlob, setRecordedBlob] = useState(null);
-  const [speechActive, setSpeechActive] = useState(false);
-
-  // ── STT error state & mode tracking ──────────────────────────────────────────
+  const [wsConnected, setWsConnected] = useState(false);
+  const [transcriptFallback, setTranscriptFallback] = useState(false);
   const [speechError, setSpeechError] = useState("");
-  const [speechErrorTone, setSpeechErrorTone] = useState("warning"); // "warning" | "info"
-  const [webSpeechDisabledState, setWebSpeechDisabledState] = useState(false);
 
   // ── Refs ──────────────────────────────────────────────────────────────────
   const previewVideoRef = useRef(null);   // pre-check preview
@@ -43,57 +37,89 @@ export default function Interview() {
   const streamRef = useRef(null);         // persists from device check through interview
   const mediaRecorderRef = useRef(null);
   const chunksRef = useRef([]);
-  const recognitionRef = useRef(null);
+  const wsRef = useRef(null);
+  const retryCountRef = useRef(0);
   const analyserRef = useRef(null);
   const micAnimFrameRef = useRef(null);
   const isRecordingRef = useRef(false);
-  const audioCtxRef = useRef(null);       // Part 1.1: track AudioContext for cleanup
+  const audioCtxRef = useRef(null);
 
-  // Web Speech error & fallback tracking refs
-  const webSpeechFailCountRef = useRef(0);
-  const webSpeechDisabledRef = useRef(false);
+  // ── WebSocket Real-Time Transcription ─────────────────────────────────────
+  function connectTranscriptionWS(currSessionId) {
+    if (!currSessionId) return;
+    closeTranscriptionWS();
 
-  // ── Part 1.3: Stuck-detector refs ─────────────────────────────────────────
-  const lastResultTimeRef = useRef(null);
-  const stuckTimerRef = useRef(null);
+    const token = localStorage.getItem("token") || "";
+    const apiBase = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
+    const wsBase = apiBase.replace(/^http/i, "ws").replace(/\/api\/?$/, "");
+    const url = `${wsBase}/ws/transcribe/${currSessionId}?token=${token}`;
 
-  // ── Part 1.4: Server-side transcription polling refs ──────────────────────
-  const transcribePollRef = useRef(null);
-  const transcribingRef = useRef(false);
+    try {
+      const ws = new WebSocket(url);
+      ws.binaryType = "arraybuffer";
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // Partial Transcription Polling
-  // ─────────────────────────────────────────────────────────────────────────
+      ws.onopen = () => {
+        retryCountRef.current = 0;
+        setWsConnected(true);
+        setTranscriptFallback(false);
+        setSpeechError("");
+      };
 
-  function speedUpFallbackPolling() {
-    if (transcribePollRef.current) {
-      clearInterval(transcribePollRef.current);
-      transcribePollRef.current = setInterval(runPartialTranscribe, 3500); // faster once it's the sole mechanism
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.error) {
+            console.warn("[ws] transcription warning:", msg.error);
+            return;
+          }
+          if (msg.isFinal) {
+            setTranscript((prev) => {
+              const clean = msg.final?.trim();
+              if (!clean) return prev;
+              return prev ? prev.trim() + " " + clean + " " : clean + " ";
+            });
+            setPartialWord("");
+          } else if (msg.partial) {
+            setPartialWord(msg.partial);
+          }
+        } catch (err) {
+          console.warn("[ws] parse error:", err);
+        }
+      };
+
+      ws.onerror = (err) => {
+        console.warn("[ws] socket error:", err);
+      };
+
+      ws.onclose = (event) => {
+        setWsConnected(false);
+        if (isRecordingRef.current && event.code !== 1000 && retryCountRef.current < 3) {
+          retryCountRef.current += 1;
+          setTimeout(() => {
+            if (isRecordingRef.current) connectTranscriptionWS(currSessionId);
+          }, 1500);
+        } else if (retryCountRef.current >= 3) {
+          setTranscriptFallback(true);
+          setSpeechError("Real-time transcription disconnected — you can type your answer manually.");
+        }
+      };
+
+      wsRef.current = ws;
+    } catch (err) {
+      console.warn("[ws] failed to initialize:", err);
+      setTranscriptFallback(true);
     }
   }
 
-  async function runPartialTranscribe() {
-    if (transcribingRef.current || chunksRef.current.length === 0) return;
-    transcribingRef.current = true;
-    try {
-      const blobSoFar = new Blob(chunksRef.current, { type: "video/webm" });
-      const formData = new FormData();
-      formData.append("file", blobSoFar, "partial.webm");
-      const { data } = await api.post(`/interview/transcribe-partial`, formData);
-      if (data.transcript && data.transcript.trim()) {
-        setTranscript((prev) => (prev.trim() ? prev : data.transcript.trim()));
-        if (webSpeechDisabledRef.current) {
-          setSpeechError("Using backup transcription — your answer is being captured.");
-          setSpeechErrorTone("info");
-        } else {
-          setSpeechError("");
-        }
-      }
-    } catch (err) {
-      console.warn("[partial-transcribe] failed:", err.message);
-    } finally {
-      transcribingRef.current = false;
+  function closeTranscriptionWS() {
+    if (wsRef.current) {
+      try {
+        wsRef.current.close(1000, "Normal Closure");
+      } catch {}
+      wsRef.current = null;
     }
+    setWsConnected(false);
+    setPartialWord("");
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -107,22 +133,11 @@ export default function Interview() {
   function stopAllMedia() {
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
-    stopSpeechRecognition();
+    closeTranscriptionWS();
     if (micAnimFrameRef.current) cancelAnimationFrame(micAnimFrameRef.current);
-    // Part 1.1: Close AudioContext on full stop
     if (audioCtxRef.current) {
       audioCtxRef.current.close();
       audioCtxRef.current = null;
-    }
-    // Part 1.4: Clear transcription polling
-    if (transcribePollRef.current) {
-      clearInterval(transcribePollRef.current);
-      transcribePollRef.current = null;
-    }
-    // Part 1.3: Clear stuck-detector
-    if (stuckTimerRef.current) {
-      clearInterval(stuckTimerRef.current);
-      stuckTimerRef.current = null;
     }
   }
 
@@ -262,45 +277,35 @@ export default function Interview() {
   function startRecording() {
     if (!streamRef.current) return;
     chunksRef.current = [];
-    setSpeechError(""); // Clear any previous speech errors
+    setSpeechError("");
+    setPartialWord("");
+
     const recorder = new MediaRecorder(streamRef.current, {
       mimeType: MediaRecorder.isTypeSupported("video/webm;codecs=vp8,opus")
         ? "video/webm;codecs=vp8,opus"
         : "video/webm",
     });
+
     recorder.ondataavailable = (e) => {
-      if (e.data.size > 0) chunksRef.current.push(e.data);
+      if (e.data.size > 0) {
+        chunksRef.current.push(e.data);
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+          wsRef.current.send(e.data);
+        }
+      }
     };
+
     recorder.onstop = () => {
       const blob = new Blob(chunksRef.current, { type: "video/webm" });
       setRecordedBlob(blob);
     };
-    recorder.start(500); // collect chunks every 500ms
+
+    recorder.start(250); // 250 ms timeslice for responsive real-time audio chunks
     mediaRecorderRef.current = recorder;
     isRecordingRef.current = true;
     setIsRecording(true);
-    startSpeechRecognition();
 
-    // Part 1.4: Poll every 6s — send accumulated audio for server-side transcript
-    transcribePollRef.current = setInterval(async () => {
-      if (transcribingRef.current || chunksRef.current.length === 0) return;
-      transcribingRef.current = true;
-      try {
-        const blobSoFar = new Blob(chunksRef.current, { type: "video/webm" });
-        const formData = new FormData();
-        formData.append("file", blobSoFar, "partial.webm");
-        const { data } = await api.post(`/interview/transcribe-partial`, formData);
-        if (data.transcript && data.transcript.trim()) {
-          // Only use this if Web Speech API hasn't already produced text —
-          // avoid fighting with it if the browser path is working fine.
-          setTranscript((prev) => (prev.trim() ? prev : data.transcript.trim()));
-        }
-      } catch (err) {
-        console.warn("[partial-transcribe] failed:", err.message);
-      } finally {
-        transcribingRef.current = false;
-      }
-    }, 6000);
+    connectTranscriptionWS(sessionId);
   }
 
   function stopCurrentRecording() {
@@ -309,142 +314,7 @@ export default function Interview() {
     }
     isRecordingRef.current = false;
     setIsRecording(false);
-    stopSpeechRecognition();
-    // Part 1.4: Clear transcription polling
-    if (transcribePollRef.current) {
-      clearInterval(transcribePollRef.current);
-      transcribePollRef.current = null;
-    }
-    // Part 1.3: Clear stuck-detector
-    if (stuckTimerRef.current) {
-      clearInterval(stuckTimerRef.current);
-      stuckTimerRef.current = null;
-    }
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // REAL-TIME SPEECH → TRANSCRIPT
-  // ─────────────────────────────────────────────────────────────────────────
-
-  const startSpeechRecognition = useCallback(() => {
-    if (!SpeechRecognition) {
-      console.warn("[speech] SpeechRecognition API not supported in this browser.");
-      return;
-    }
-    if (recognitionRef.current) {
-      try { recognitionRef.current.abort(); } catch {}
-      recognitionRef.current = null;
-    }
-
-    try {
-      const recognition = new SpeechRecognition();
-      recognition.continuous = true;
-      recognition.interimResults = true;
-      recognition.lang = "en-US";
-      recognitionRef.current = recognition;
-
-      recognition.onstart = () => {
-        setSpeechActive(true);
-        // Part 1.3: Reset stuck-detector when recognition starts
-        lastResultTimeRef.current = Date.now();
-        if (stuckTimerRef.current) clearInterval(stuckTimerRef.current);
-        stuckTimerRef.current = setInterval(() => {
-          if (
-            lastResultTimeRef.current &&
-            Date.now() - lastResultTimeRef.current > 10000
-          ) {
-            setSpeechError(
-              "Live transcription seems stuck — you can keep typing your answer."
-            );
-            clearInterval(stuckTimerRef.current);
-            stuckTimerRef.current = null;
-          }
-        }, 2000);
-      };
-
-      recognition.onresult = (event) => {
-        // Part 1.3: Update last result time
-        lastResultTimeRef.current = Date.now();
-        setSpeechError(""); // Clear any stuck error
-
-        let finalChunk = "";
-        let interimChunk = "";
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-          const r = event.results[i];
-          if (r.isFinal) {
-            finalChunk += r[0].transcript + " ";
-          } else {
-            interimChunk += r[0].transcript;
-          }
-        }
-        if (finalChunk) {
-          setTranscript((prev) => (prev ? prev.trim() + " " + finalChunk.trim() : finalChunk.trim()));
-        }
-        setInterimText(interimChunk);
-        setSpeechActive(true);
-      };
-
-      recognition.onend = () => {
-        setSpeechActive(false);
-        setInterimText("");
-        // Part 1.3: Clear stuck-detector on end
-        if (stuckTimerRef.current) {
-          clearInterval(stuckTimerRef.current);
-          stuckTimerRef.current = null;
-        }
-        // Auto-restart with fresh recognition instance if still recording
-        if (isRecordingRef.current) {
-          setTimeout(() => {
-            if (isRecordingRef.current) {
-              startSpeechRecognition();
-            }
-          }, 200);
-        }
-      };
-
-      // Part 1.2: Surface STT errors to the user
-      recognition.onerror = (e) => {
-        console.warn("[speech] recognition error:", e.error);
-        if (e.error === "not-allowed" || e.error === "service-not-allowed") {
-          isRecordingRef.current = false;
-          setSpeechError("Microphone permission was denied — please type your answer.");
-        } else if (e.error === "network") {
-          setSpeechError("Live transcription needs an internet connection and isn't reachable right now — please type your answer, or check your connection.");
-        } else if (e.error === "no-speech") {
-          // benign, happens during silence — don't surface as an error
-        } else {
-          setSpeechError("Live transcription hit an issue — you can keep typing your answer.");
-        }
-      };
-
-      recognition.start();
-    } catch (err) {
-      console.warn("[speech] Failed to initialize recognition:", err);
-    }
-  }, []);
-
-  function stopSpeechRecognition() {
-    isRecordingRef.current = false;
-    if (recognitionRef.current) {
-      try { recognitionRef.current.abort(); } catch {}
-      recognitionRef.current = null;
-    }
-    setSpeechActive(false);
-    setInterimText("");
-    // Part 1.3: Clear stuck-detector
-    if (stuckTimerRef.current) {
-      clearInterval(stuckTimerRef.current);
-      stuckTimerRef.current = null;
-    }
-  }
-
-  function toggleManualSpeech() {
-    if (speechActive || recognitionRef.current) {
-      stopSpeechRecognition();
-    } else {
-      isRecordingRef.current = true;
-      startSpeechRecognition();
-    }
+    closeTranscriptionWS();
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -455,14 +325,13 @@ export default function Interview() {
     e.preventDefault();
     setSubmitting(true);
     stopCurrentRecording();
-    stopSpeechRecognition();
 
     // Wait a tick for the onstop blob to be set
     await new Promise((r) => setTimeout(r, 600));
 
     try {
       const formData = new FormData();
-      const finalTranscript = (transcript + " " + interimText).trim();
+      const finalTranscript = (transcript + (partialWord ? " " + partialWord : "")).trim();
       if (finalTranscript) formData.append("transcript", finalTranscript);
 
       // Use the recorded blob captured above (might still be setting)
@@ -482,13 +351,12 @@ export default function Interview() {
         setQuestionNum((n) => n + 1);
         setFeedback({ lastScore: data.lastScore });
         setTranscript("");
-        setInterimText("");
+        setPartialWord("");
         setSpeechError("");
         setRecordedBlob(null);
         chunksRef.current = [];
-        webSpeechFailCountRef.current = 0;
-        webSpeechDisabledRef.current = false;
-        setWebSpeechDisabledState(false);
+        retryCountRef.current = 0;
+        setTranscriptFallback(false);
         // Re-start recording for next question
         setTimeout(() => startRecording(), 200);
       }
@@ -682,7 +550,8 @@ export default function Interview() {
   // RENDER: Active Interview
   // ─────────────────────────────────────────────────────────────────────────
 
-  const canSubmit = !submitting && (transcript.trim().length > 0 || interimText.trim().length > 0 || recordedBlob);
+  const fullText = (transcript + (partialWord ? " " + partialWord : "")).trim();
+  const canSubmit = !submitting && (fullText.length > 0 || recordedBlob);
 
   return (
     <div className="interview-page max-w-4xl mx-auto px-4 py-8">
@@ -725,12 +594,16 @@ export default function Interview() {
 
           {/* Speech activity indicator */}
           <div className={`text-xs flex items-center gap-2 px-3 py-2 rounded-xl transition-all ${
-            speechActive
+            partialWord || (isRecording && micLevel > 15)
               ? "bg-emerald-50 text-emerald-700 border border-emerald-100"
               : "bg-slate-50 text-slate-400 border border-slate-100"
           }`}>
-            <span className={`w-2 h-2 rounded-full ${speechActive ? "bg-emerald-500 animate-pulse" : "bg-slate-300"}`} />
-            {speechActive ? "Speaking — auto-transcribing" : "Listening…"}
+            <span className={`w-2 h-2 rounded-full ${partialWord || (isRecording && micLevel > 15) ? "bg-emerald-500 animate-pulse" : "bg-slate-300"}`} />
+            {partialWord
+              ? "Speaking — live transcribing"
+              : isRecording && micLevel > 15
+              ? "Voice detected"
+              : "Listening…"}
           </div>
 
           {/* Progress */}
@@ -769,9 +642,9 @@ export default function Interview() {
               <span className="text-xs font-semibold text-indigo-600 uppercase tracking-wider">
                 Question {questionNum} of {maxQuestions}
               </span>
-              {!SpeechRecognition && (
+              {transcriptFallback && (
                 <span className="text-xs bg-amber-50 text-amber-700 px-2 py-0.5 rounded-full">
-                  Auto-transcription unavailable — type below
+                  Manual typing mode
                 </span>
               )}
             </div>
@@ -780,85 +653,22 @@ export default function Interview() {
             </h1>
           </div>
 
-          {/* Answer area */}
-          <div className="bg-white border border-slate-100 rounded-2xl shadow-sm p-6 space-y-4">
-            <div className="flex items-center justify-between">
-              <label className="text-xs font-semibold text-slate-700">
-                Your Answer
-              </label>
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-slate-500 flex items-center gap-1.5 font-normal">
-                  {webSpeechDisabledState ? (
-                    <>🔄 Backup transcription (few seconds delay)</>
-                  ) : speechActive ? (
-                    <>⚡ Live transcription active</>
-                  ) : (
-                    <>🎙️ Waiting for speech…</>
-                  )}
-                </span>
-                {SpeechRecognition && !webSpeechDisabledState && (
-                  <button
-                    type="button"
-                    onClick={toggleManualSpeech}
-                    className={`text-xs px-2.5 py-1 rounded-lg border font-medium transition cursor-pointer flex items-center gap-1.5 ${
-                      speechActive
-                        ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-                        : "bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100"
-                    }`}
-                  >
-                    <span className={`w-2 h-2 rounded-full ${speechActive ? "bg-emerald-500 animate-pulse" : "bg-indigo-400"}`} />
-                    {speechActive ? "🎙️ Mic Active (Listening)" : "⚡ Click to Start Mic"}
-                  </button>
-                )}
-              </div>
-            </div>
-
-            {/* Part 1.2 & Fix 2: Speech error/info banner */}
-            {speechError && (
-              <div className={`text-xs px-3.5 py-2.5 rounded-xl border ${
-                speechErrorTone === "info"
-                  ? "text-indigo-700 bg-indigo-50 border-indigo-200"
-                  : "text-amber-800 bg-amber-50 border-amber-200"
-              }`}>
-                {speechErrorTone === "info" ? "ℹ️" : "⚠️"} {speechError}
-              </div>
-            )}
-
-            {/* Combined real text + interim ghost text */}
-            <div className="relative">
-              <textarea
-                className="w-full border border-slate-200 rounded-xl px-4 py-3 text-sm h-36 focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none bg-white"
-                placeholder={
-                  SpeechRecognition
-                    ? "Start speaking — your words will appear here automatically. You can also type or edit."
-                    : "Type your answer here..."
-                }
-                value={
-                  interimText
-                    ? (transcript ? transcript.trim() + " " + interimText.trim() : interimText)
-                    : transcript
-                }
-                onChange={(e) => {
-                  setTranscript(e.target.value);
-                  setInterimText("");
-                }}
-              />
-            </div>
-
-            {/* Character count */}
-            <div className="flex justify-between items-center text-xs text-slate-400">
-              <span>
-                {(transcript + " " + interimText).trim().split(/\s+/).filter(Boolean).length} words
-              </span>
-              <span>
-                {(transcript + interimText).length} characters
-              </span>
-            </div>
+          {/* Answer area with real-time TranscriptPanel */}
+          <div className="space-y-4">
+            <TranscriptPanel
+              transcript={transcript}
+              onTranscriptChange={setTranscript}
+              partialWord={partialWord}
+              isRecording={isRecording}
+              wsConnected={wsConnected}
+              isFallback={transcriptFallback}
+              errorMessage={speechError}
+            />
 
             <button
               onClick={handleSubmit}
               disabled={!canSubmit}
-              className="w-full bg-indigo-600 text-white rounded-xl py-3 font-semibold text-sm disabled:opacity-40 hover:bg-indigo-700 transition"
+              className="w-full bg-indigo-600 text-white rounded-xl py-3 font-semibold text-sm disabled:opacity-40 hover:bg-indigo-700 transition cursor-pointer"
             >
               {submitting ? (
                 <span className="flex items-center justify-center gap-2">

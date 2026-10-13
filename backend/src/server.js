@@ -5,6 +5,9 @@ import { connectDB } from "./config/db.js";
 import authRoutes from "./routes/auth.routes.js";
 import interviewRoutes from "./routes/interview.routes.js";
 
+import http from "http";
+import { attachWS } from "./ws.js";
+
 dotenv.config();
 
 const app = express();
@@ -17,7 +20,9 @@ app.use("/api/auth", authRoutes);
 app.use("/api/interview", interviewRoutes);
 
 const PORT = process.env.PORT || 5000;
+const httpServer = http.createServer(app);
+attachWS(httpServer);
 
 connectDB().then(() => {
-  app.listen(PORT, () => console.log(`[server] listening on port ${PORT}`));
+  httpServer.listen(PORT, () => console.log(`[server] listening on port ${PORT}`));
 });
