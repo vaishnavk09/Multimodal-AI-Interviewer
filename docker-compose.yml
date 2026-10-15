@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   mongo:
     image: mongo:7
@@ -18,11 +16,11 @@ services:
     build: ./backend
     ports:
       - "5000:5000"
+    env_file:
+      - ./backend/.env
     environment:
       - MONGO_URI=mongodb://mongo:27017/mock_interviewer
       - AI_SERVICE_URL=http://ai-services:8000
-      - JWT_SECRET=${JWT_SECRET:-dev_secret_change_me}
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
     depends_on:
       - mongo
       - ai-services
