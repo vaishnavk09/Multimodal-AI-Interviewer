@@ -1,9 +1,11 @@
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import User from "../models/User.js";
+import { JWT_SECRET } from "../middleware/auth.middleware.js";
 
 function signToken(userId) {
-  return jwt.sign({ userId }, process.env.JWT_SECRET, { expiresIn: "7d" });
+  if (!JWT_SECRET) throw new Error("JWT_SECRET is not configured");
+  return jwt.sign({ userId }, JWT_SECRET, { expiresIn: "7d" });
 }
 
 export async function signup(req, res) {

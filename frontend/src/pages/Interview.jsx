@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams, useLocation, Link } from "react-router-dom";
 import api from "../api.js";
 import TranscriptPanel from "../components/TranscriptPanel.jsx";
@@ -16,6 +16,7 @@ export default function Interview() {
   const [feedback, setFeedback] = useState(null);
   const [done, setDone] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState("");
 
   // ── Device / media state ──────────────────────────────────────────────────
   const [deviceCheckDone, setDeviceCheckDone] = useState(false);
@@ -37,6 +38,7 @@ export default function Interview() {
   const streamRef = useRef(null);         // persists from device check through interview
   const mediaRecorderRef = useRef(null);
   const chunksRef = useRef([]);
+  const headerChunkRef = useRef(null);   // first MediaRecorder chunk (WebM init segment)
   const wsRef = useRef(null);
   const retryCountRef = useRef(0);
   const analyserRef = useRef(null);
@@ -44,7 +46,10 @@ export default function Interview() {
   const isRecordingRef = useRef(false);
   const audioCtxRef = useRef(null);
 
-  // ── WebSocket Real-Time Transcription ─────────────────────────────────────
+  // ── Real-time transcription over WebSocket ────────────────────────────────
+  // The browser streams WebM/Opus audio to the Node gateway, which relays it to
+  // the configured upstream engine (Deepgram when a key is set, else the local
+  // Whisper service). Transcript frames come back as {isFinal, final|partial}.
   function connectTranscriptionWS(currSessionId) {
     if (!currSessionId) return;
     closeTranscriptionWS();
@@ -59,10 +64,21 @@ export default function Interview() {
       ws.binaryType = "arraybuffer";
 
       ws.onopen = () => {
+        const isReconnect = retryCountRef.current > 0;
         retryCountRef.current = 0;
         setWsConnected(true);
         setTranscriptFallback(false);
         setSpeechError("");
+        // On a reconnect, the server-side decoder is brand new and has not seen
+        // the WebM init segment. Replay the captured header chunk first so the
+        // mid-stream audio that follows is decodable.
+        if (isReconnect && headerChunkRef.current && ws.readyState === WebSocket.OPEN) {
+          try {
+            ws.send(headerChunkRef.current);
+          } catch (err) {
+            console.warn("[ws] header replay failed:", err);
+          }
+        }
       };
 
       ws.onmessage = (event) => {
@@ -277,6 +293,7 @@ export default function Interview() {
   function startRecording() {
     if (!streamRef.current) return;
     chunksRef.current = [];
+    headerChunkRef.current = null; // new recording → new WebM header
     setSpeechError("");
     setPartialWord("");
 
@@ -289,6 +306,9 @@ export default function Interview() {
     recorder.ondataavailable = (e) => {
       if (e.data.size > 0) {
         chunksRef.current.push(e.data);
+        // The first chunk carries the WebM init segment (EBML header + tracks);
+        // keep it so we can replay it after a transcription-socket reconnect.
+        if (!headerChunkRef.current) headerChunkRef.current = e.data;
         if (wsRef.current?.readyState === WebSocket.OPEN) {
           wsRef.current.send(e.data);
         }
@@ -308,13 +328,34 @@ export default function Interview() {
     connectTranscriptionWS(sessionId);
   }
 
-  function stopCurrentRecording() {
-    if (mediaRecorderRef.current?.state === "recording") {
-      mediaRecorderRef.current.stop();
-    }
-    isRecordingRef.current = false;
-    setIsRecording(false);
-    closeTranscriptionWS();
+  // Stop recording and resolve once the final blob is actually available,
+  // instead of racing a fixed setTimeout.
+  function stopRecordingAndFlush() {
+    return new Promise((resolve) => {
+      const recorder = mediaRecorderRef.current;
+      isRecordingRef.current = false;
+      setIsRecording(false);
+      closeTranscriptionWS();
+
+      const buildBlob = () =>
+        chunksRef.current.length > 0
+          ? new Blob(chunksRef.current, { type: "video/webm" })
+          : null;
+
+      if (!recorder || recorder.state !== "recording") {
+        const blob = buildBlob();
+        setRecordedBlob(blob);
+        resolve(blob);
+        return;
+      }
+
+      recorder.onstop = () => {
+        const blob = buildBlob();
+        setRecordedBlob(blob);
+        resolve(blob);
+      };
+      recorder.stop();
+    });
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -324,20 +365,15 @@ export default function Interview() {
   async function handleSubmit(e) {
     e.preventDefault();
     setSubmitting(true);
-    stopCurrentRecording();
+    setSubmitError("");
 
-    // Wait a tick for the onstop blob to be set
-    await new Promise((r) => setTimeout(r, 600));
+    // Stop recording and wait for the final blob deterministically.
+    const blob = await stopRecordingAndFlush();
 
     try {
       const formData = new FormData();
       const finalTranscript = (transcript + (partialWord ? " " + partialWord : "")).trim();
       if (finalTranscript) formData.append("transcript", finalTranscript);
-
-      // Use the recorded blob captured above (might still be setting)
-      const blob = recordedBlob || (chunksRef.current.length > 0
-        ? new Blob(chunksRef.current, { type: "video/webm" })
-        : null);
       if (blob) formData.append("video", blob, "answer.webm");
 
       const { data } = await api.post(`/interview/${sessionId}/respond`, formData);
@@ -362,6 +398,12 @@ export default function Interview() {
       }
     } catch (err) {
       console.error(err);
+      // Surface the failure and let the user retry — the recorded blob and
+      // transcript are preserved so a resubmit does not lose their answer.
+      setSubmitError(
+        err?.response?.data?.message ||
+          "Couldn't submit your answer. Check your connection and try again."
+      );
     } finally {
       setSubmitting(false);
     }
@@ -679,6 +721,12 @@ export default function Interview() {
                 "Submit Answer →"
               )}
             </button>
+
+            {submitError && (
+              <div className="bg-red-50 border border-red-200 text-red-700 text-xs px-3.5 py-2.5 rounded-xl">
+                ⚠️ {submitError}
+              </div>
+            )}
           </div>
         </div>
       </div>

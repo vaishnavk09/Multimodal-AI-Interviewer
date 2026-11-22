@@ -103,12 +103,12 @@ async def parse_resume(file: UploadFile = File(...)):
 
 @app.post("/transcribe", response_model=TranscribeResponse)
 async def transcribe(file: UploadFile = File(...)):
-    global _whisper_model
     try:
-        from faster_whisper import WhisperModel
+        # Reuse the single shared, env-configurable whisper model (base.en by
+        # default) rather than loading a second "base" model into memory.
+        from routers.transcribe_stream import get_whisper_model
 
-        if _whisper_model is None:
-            _whisper_model = WhisperModel("base", device="cpu", compute_type="int8")
+        model = get_whisper_model()
         content = await file.read()
         safe_name = re.sub(r"[^a-zA-Z0-9.]", "-", file.filename or "answer.webm")
         temp_dir = tempfile.gettempdir()
@@ -116,7 +116,15 @@ async def transcribe(file: UploadFile = File(...)):
         with open(temp_path, "wb") as output:
             output.write(content)
         try:
-            segments, _ = _whisper_model.transcribe(temp_path)
+            segments, _ = model.transcribe(
+                temp_path,
+                language="en",
+                beam_size=5,
+                condition_on_previous_text=False,
+                no_speech_threshold=0.6,
+                log_prob_threshold=-1.0,
+                temperature=0.0,
+            )
             transcript = " ".join(segment.text.strip() for segment in segments).strip()
             return TranscribeResponse(transcript=transcript)
         finally:

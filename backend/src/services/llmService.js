@@ -1,14 +1,17 @@
 import axios from "axios";
 import { STAGE_DESCRIPTIONS } from "./interviewPlan.js";
 
+// Currently-available Gemini models (3.x generation), confirmed by the live
+// API's own "no longer available, use X" error messages. Ordered best-first; we
+// fall through to a lighter model, then a version-agnostic alias, only if a call
+// actually fails. If Google retires these, the API error names the replacement.
 const GEMINI_MODELS = [
-  "gemini-3.6-flash",
-  "gemini-3.5-flash",
-  "gemini-2.5-flash-lite",
+  "gemini-3.8-flash",
+  "gemini-3.5-flash-lite",
   "gemini-flash-latest",
-  "gemini-3.7-flash",
-  "gemini-3.1-flash-lite",
 ];
+
+const GEMINI_TIMEOUT_MS = 6000;
 
 /**
  * Generates a domain-specific interview question using Gemini Flash API.
@@ -91,8 +94,16 @@ Return JSON ONLY in this format: {"type": "follow_up" | "new_topic", "question":
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
       const { data } = await axios.post(
         url,
-        { contents: [{ parts: [{ text: prompt }] }] },
-        { timeout: 8000 }
+        {
+          contents: [{ parts: [{ text: prompt }] }],
+          // Ask Gemini for raw JSON so we don't have to strip markdown fences.
+          generationConfig: {
+            responseMimeType: "application/json",
+            temperature: 0.7,
+            maxOutputTokens: 256,
+          },
+        },
+        { timeout: GEMINI_TIMEOUT_MS }
       );
       let text = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
       if (text) {
@@ -126,6 +137,66 @@ Return JSON ONLY in this format: {"type": "follow_up" | "new_topic", "question":
 
   console.warn("[llmService] All Gemini model calls failed, using fallback question bank");
   return fallbackQuestion(domain, stage, validHistory.length);
+}
+
+/**
+ * Uses Gemini to evaluate the CONTENT of a candidate's answer against the
+ * question (relevance, correctness, depth, structure), scaled by experience
+ * level. Returns { contentScore, feedback, source } or null when Gemini is
+ * unavailable / all calls fail, so the caller can fall back to the semantic
+ * similarity score from the Python service.
+ */
+export async function evaluateAnswer(question, transcript, candidateContext = null, domain = "General") {
+  if (!transcript || !transcript.trim()) {
+    return { contentScore: 0, feedback: "No answer was recorded — remember to speak clearly into the microphone.", source: "empty" };
+  }
+
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) return null; // signal caller to use the Python NLP fallback
+
+  const expLevel = candidateContext?.experienceLevel || "Fresher";
+  const prompt = `You are a strict but fair technical interviewer evaluating a candidate's spoken answer.
+Domain: ${domain}. Candidate experience level: ${expLevel}.
+Question: "${question}"
+Candidate answer (speech-to-text, may contain minor transcription errors): "${transcript}"
+
+Evaluate the CONTENT only (ignore voice and video delivery). Judge relevance to the question, technical correctness, depth, and structure. Hold higher experience levels to a higher bar. Do not reward empty or off-topic answers.
+
+Return JSON ONLY: {"score": <integer 0-100>, "strengths": "<one short sentence>", "improvement": "<one short actionable sentence>"}`;
+
+  for (const model of GEMINI_MODELS) {
+    try {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+      const { data } = await axios.post(
+        url,
+        {
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: {
+            responseMimeType: "application/json",
+            temperature: 0.3,
+            maxOutputTokens: 256,
+          },
+        },
+        { timeout: GEMINI_TIMEOUT_MS }
+      );
+      let text = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+      if (text) {
+        text = text.replace(/```json/gi, "").replace(/```/g, "").trim();
+        const parsed = JSON.parse(text);
+        if (parsed && parsed.score != null && !Number.isNaN(Number(parsed.score))) {
+          const score = Math.max(0, Math.min(100, Math.round(Number(parsed.score))));
+          const feedback = [parsed.strengths, parsed.improvement].filter(Boolean).join(" ").trim();
+          console.log(`[llmService] Evaluated answer using Gemini (${model}) → ${score}/100`);
+          return { contentScore: score, feedback: feedback || "Keep your answers structured and specific.", source: "llm" };
+        }
+      }
+    } catch (err) {
+      console.error(`[llmService] Gemini evaluation model ${model} failed:`, err.response?.data?.error?.message || err.message);
+    }
+  }
+
+  console.warn("[llmService] All Gemini evaluation calls failed — falling back to semantic score");
+  return null;
 }
 
 function fallbackQuestion(domain, stage, turnIndex = 0) {

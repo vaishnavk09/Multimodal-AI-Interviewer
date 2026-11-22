@@ -2,7 +2,7 @@ import fs from "fs";
 import axios from "axios";
 import Session from "../models/Session.js";
 import User from "../models/User.js";
-import { generateQuestion } from "../services/llmService.js";
+import { generateQuestion, evaluateAnswer } from "../services/llmService.js";
 import { buildStagePlan } from "../services/interviewPlan.js";
 
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL || "http://localhost:8000";
@@ -139,6 +139,15 @@ export async function submitResponse(req, res) {
     if (mediaFile) {
       try {
         mediaBuffer = fs.readFileSync(mediaFile.path);
+      } catch (err) {
+        console.warn("[interview] Failed to read uploaded media:", err.message);
+      }
+    }
+
+    // The live WebSocket transcript is now the primary source. Only fall back to
+    // a full server-side re-transcription when the client sent no usable text.
+    if (mediaFile && mediaBuffer && (!transcript || !transcript.trim())) {
+      try {
         const formData = new FormData();
         formData.append("file", new Blob([mediaBuffer]), mediaFile.originalname);
         const { data } = await axios.post(`${AI_SERVICE_URL}/transcribe`, formData, {
@@ -146,12 +155,10 @@ export async function submitResponse(req, res) {
           timeout: 120000,
         });
         if (data.transcript && data.transcript.trim()) {
-          if (!transcript || !transcript.trim()) {
-            transcript = data.transcript;
-          }
+          transcript = data.transcript;
         }
       } catch (err) {
-        console.warn("[interview] Audio transcription failed, using live/typed answer:", err.message);
+        console.warn("[interview] Fallback transcription failed:", err.message);
       }
     }
     current.transcript = transcript || "";
@@ -178,15 +185,44 @@ export async function submitResponse(req, res) {
       }
     }
 
+    // Primary content score: LLM evaluation of the answer against the question.
+    // Falls back to the Python semantic-similarity score when Gemini is
+    // unavailable or every model call fails.
+    let contentScore = analysis.nlpScore;
+    let contentFeedback = null;
+    try {
+      const evaluation = await evaluateAnswer(
+        current.question,
+        current.transcript,
+        candidateContext,
+        session.domain
+      );
+      if (evaluation) {
+        contentScore = evaluation.contentScore;
+        contentFeedback = evaluation.feedback;
+      }
+    } catch (err) {
+      console.warn("[interview] Answer evaluation failed, using semantic score:", err.message);
+    }
+
     const fusedScore = Math.round(
-      0.5 * analysis.nlpScore + 0.25 * analysis.facialScore + 0.25 * analysis.speechScore
+      0.5 * contentScore + 0.25 * analysis.facialScore + 0.25 * analysis.speechScore
     );
+
+    // Combine content feedback with short delivery hints.
+    const feedbackParts = [contentFeedback || analysis.feedback];
+    if (analysis.facialScore < 60) {
+      feedbackParts.push("Work on steadier eye contact and a more relaxed expression.");
+    }
+    if (analysis.speechScore < 60) {
+      feedbackParts.push("Slow down slightly and cut filler words for clearer delivery.");
+    }
 
     current.facialScore = analysis.facialScore;
     current.speechScore = analysis.speechScore;
-    current.nlpScore = analysis.nlpScore;
+    current.nlpScore = contentScore;
     current.fusedScore = fusedScore;
-    current.feedback = analysis.feedback || "Keep your answers structured and specific.";
+    current.feedback = feedbackParts.filter(Boolean).join(" ") || "Keep your answers structured and specific.";
 
     const maxQuestions = session.maxQuestions || 5;
     if (session.responses.length < maxQuestions) {
